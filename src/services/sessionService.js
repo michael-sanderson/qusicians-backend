@@ -1,92 +1,113 @@
-// Manages host sessions in Redis
+// services/sessionService.js
+//
+// Session state manager.
+// Responsible for creating, loading, mutating, and persisting
+// session data in Redis. Not an HTTP-facing service.
 
-module.exports = (crypto, redisClient, logger, C) => {
-  /** --- OAuth State Methods --- **/
+module.exports = (redisClient, logger, C) => {
+  /* ------------------------------------------------------------------
+   * Redis helpers
+   * ------------------------------------------------------------------ */
 
-  // Generate and persist state ID short term
-  const generateAndStoreState = async () => {
-    const newState = crypto.randomBytes(16).toString("hex");
-    await redisClient.setEx(
-      C.STATE_PREFIX + newState,
-      C.STATE_TTL_SECONDS,
-      "valid"
-    );
-    return newState;
-  };
+  const sessionKey = (sessionId) =>
+    `${C.SESSION_PREFIX}${sessionId}`;
 
-  // Check state matches returned sate from Spotify then remove from Redis
-  const verifyAndConsumeState = async (state) => {
-    const key = C.STATE_PREFIX + state;
-    const exists = await redisClient.get(key);
-    if (!exists) return false;
-    await redisClient.del(key);
-    return true;
-  };
+  /* ------------------------------------------------------------------
+   * Session lifecycle
+   * ------------------------------------------------------------------ */
 
-  /** --- Session Methods --- **/
-
-  // Create a new host session
+  // Create and persist a new host session
   const createHostSession = async (sessionObj) => {
     const session = {
       ...sessionObj,
       createdAt: Date.now(),
       ttl: C.SESSION_TTL_SECONDS,
       guests: [],
-      queue: [],
     };
 
-    await redisClient.setEx(
-      C.SESSION_PREFIX + session.sessionId,
-      session.ttl,
-      JSON.stringify(session)
+    await persistSession(session);
+
+    logger.info(
+      { sessionId: session.sessionId },
+      "Host session created"
     );
-    logger.info(session.sessionId, "Host session created");
+
     return session;
   };
 
-  // Main getSession function (always returns session with valid token)
-  const getSession = async (sessionId, refreshTokenFn) => {
-    const session = await redisClient.get(C.SESSION_PREFIX + sessionId);
-    if (!session) throw new Error("Session not found");
-    const parsedSession = JSON.parse(session)
-    return refreshTokenIfExpired(parsedSession, refreshTokenFn);
+  // Load an existing session from Redis
+  const getSession = async (sessionId) => {
+    try {
+      const raw = await redisClient.get(sessionKey(sessionId));
+
+      if (!raw) {
+        logger.warn(
+          { sessionId },
+          "Session not found in store"
+        );
+        throw new Error("Session not found");
+      }
+
+      return JSON.parse(raw);
+    } catch (err) {
+      logger.error(
+        { err, sessionId },
+        "Failed to retrieve session"
+      );
+      throw err;
+    }
   };
 
-  // Lazy token refresh
-  const refreshTokenIfExpired = async (session, refreshTokenFn) => {
-    // If Token still valid
-    if (session.accessTokenExpiry > Date.now()) return session;
-    logger.debug({session}, "this is the session")
-    logger.debug({token: session.refreshToken}, "this is the token")
-
-    const tokenData = await refreshTokenFn(session.refreshToken);
+  // Add a guest to an existing session
+  // This is the only mutation driven directly by an API request
+  const addGuest = async (session, name) => {
     const updatedSession = {
       ...session,
-      accessToken: tokenData.access_token,
-      accessTokenExpiry: Date.now() + tokenData.expires_in * 1000,
+      guests: [
+        ...session.guests,
+        {
+          name,
+          joinedAt: Date.now(),
+        },
+      ],
     };
 
-    return persistSession(updatedSession);
+    await persistSession(updatedSession);
+
+    logger.info(
+      {
+        sessionId: updatedSession.sessionId,
+        guestName: name,
+      },
+      "Guest successfully joined session"
+    );
+
+    return updatedSession;
   };
 
-  // Persist session immutably
+  /* ------------------------------------------------------------------
+   * Persistence
+   * ------------------------------------------------------------------ */
+
+  // Persist session state back to Redis
   const persistSession = async (session) => {
+    const ttl = session.ttl || C.SESSION_TTL_SECONDS;
+
     await redisClient.setEx(
-      C.SESSION_PREFIX + session.sessionId,
-      session.ttl || C.SESSION_TTL_SECONDS,
+      sessionKey(session.sessionId),
+      ttl,
       JSON.stringify(session)
     );
+
     return session;
   };
 
-  return {
-    // OAuth state
-    generateAndStoreState,
-    verifyAndConsumeState,
+  /* ------------------------------------------------------------------ */
 
-    // Session management
+  return {
     createHostSession,
     getSession,
-    persistSession
+    addGuest,
+    persistSession,
   };
 };

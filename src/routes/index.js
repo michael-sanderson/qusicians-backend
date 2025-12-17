@@ -1,16 +1,54 @@
-// Root router factory — mounts all feature routers
+// routes/index.js
+//
+// Root router factory.
+// Composes feature routers and mounts them under their base paths.
+// Does not contain route logic itself.
 
-module.exports = ({ express, spotifyController }) => {
-  const router = express.Router();
-  const buildSpotifyRoutes = require("./spotify/spotifyRoutes");
+const express = require("express");
 
-  // Spotify feature routes
-  router.use("/spotify", buildSpotifyRoutes(express, spotifyController));
+module.exports = ({
+  requireSession,
+  sessionController,
+  sessionRoutes,
+  spotifyController,
+  spotifyRoutes,
+}) => {
+  // Root router
+  const rootRouter = express.Router();
+
+  // Feature routers
+  const sessionRouter = express.Router();
+  const spotifyRouter = express.Router();
+
+  /* ------------------------------------------------------------------
+   * Register feature routes
+   * ------------------------------------------------------------------ */
+
+  // Session routes (no auth required)
+  sessionRoutes(sessionRouter, sessionController);
+
+  // Spotify routes (require active session)
+  spotifyRoutes(
+    spotifyRouter,
+    requireSession,
+    spotifyController
+  );
+
+  /* ------------------------------------------------------------------
+   * Mount feature routers
+   * ------------------------------------------------------------------ */
+
+  rootRouter.use("/session", sessionRouter);
+  rootRouter.use("/spotify", spotifyRouter);
+
+  /* ------------------------------------------------------------------
+   * Fallback
+   * ------------------------------------------------------------------ */
 
   // Catch-all for unmatched routes
-  router.use((req, res) => {
+  rootRouter.use((req, res) => {
     res.status(404).send("Not found");
   });
 
-  return router;
+  return rootRouter;
 };

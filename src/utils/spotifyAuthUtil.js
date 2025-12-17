@@ -1,12 +1,13 @@
-// Generates Spotify authorization URL for OAuth login
+// utils/spotifyAuthUtil.js
+//
+// Factory that returns a function to generate a Spotify OAuth
+// authorization URL for a given state parameter.
 
-module.exports = (C) => (state) =>
-  C.SPOTIFY.AUTHORIZE_URL +
-  "?" +
-  new URLSearchParams({
+module.exports = (config) => (state) =>
+  `${config.SPOTIFY.AUTHORIZE_URL}?${new URLSearchParams({
     response_type: "code",
-    client_id: C.clientId,
-    scope: C.SPOTIFY.SCOPES,
-    redirect_uri: C.redirectUri,
+    client_id: config.clientId,
+    scope: config.SPOTIFY.SCOPES,
+    redirect_uri: config.redirectUri,
     state,
-  });
+  }).toString()}`;

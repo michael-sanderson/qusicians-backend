@@ -1,16 +1,25 @@
-// Spotify controller factory
+// controllers/spotifyController.js
 
-module.exports = (spotifyService, spotifyAuthUtil, sessionService, logger) => {
-  // Redirect user to Spotify OAuth
-  const login = async (req, res) => {
+module.exports = (
+  spotifyService,
+  spotifyAuthUtil,
+  oauthStateService,
+  sessionService,
+  setPartySessionCookie,
+  logger
+) => {
+  /* ------------------------------------------------------------------
+   * OAuth flow (complex → async/await)
+   * ------------------------------------------------------------------ */
+
+  const loginHandler = async (req, res) => {
     try {
-      // Store short-lived state (e.g. 5 mins)
-      const state = await sessionService.generateAndStoreState();
+      const state = await oauthStateService.generateAndStoreState();
       const authUrl = spotifyAuthUtil(state);
 
       logger.info(
         { state: state.slice(0, 6) + "..." },
-        "State generated - redirecting user to Spotify OAuth"
+        "Redirecting user to Spotify OAuth"
       );
 
       res.redirect(authUrl);
@@ -20,76 +29,119 @@ module.exports = (spotifyService, spotifyAuthUtil, sessionService, logger) => {
     }
   };
 
-  // Spotify callback — validate state & create host session
-  const callback = async (req, res) => {
-    const code = req.query.code || null;
-    const state = req.query.state || null;
+  const callbackHandler = async (req, res) => {
+    const { code, state } = req.query;
 
     if (!code || !state) {
-      logger.warn("Callback missing code or state");
+      logger.warn("Spotify callback missing code or state");
       return res.status(400).send("Missing code or state");
     }
 
-    // Verify the state was stored
     try {
-      const validState = await sessionService.verifyAndConsumeState(state);
+      const validState =
+        await oauthStateService.verifyAndConsumeState(state);
 
       if (!validState) {
         logger.warn({ state }, "Invalid or expired OAuth state");
         return res.status(400).send("Invalid state");
       }
 
-      // Exchange code for tokens
-      const tokenData = await spotifyService.exchangeCodeForToken(code);
+      const tokenData =
+        await spotifyService.exchangeCodeForToken(code);
 
-      // Get Spotify user
-      const hostId = await spotifyService.getCurrentUser(
-        tokenData.access_token
-      );
+      const hostData =
+        await spotifyService.getCurrentUser(
+          tokenData.access_token
+        );
 
-      // Build session object
-      const sessionObj = {
-        hostId,
-        sessionId: `${hostId}-${state}`,
+      const sessionId = `${hostData.userId}-${state}`;
+
+      await sessionService.createHostSession({
+        sessionId,
+        hostId: hostData.userId,
+        hostDisplayName: hostData.displayName,
+        hostProfileImageUrl: hostData.profileImageUrl,
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token,
-        accessTokenExpiry: Date.now() + tokenData.expires_in * 1000,
-      };
+        accessTokenExpiry:
+          Date.now() + tokenData.expires_in * 1000,
+      });
 
-      // Persist session in Redis
-      const session = await sessionService.createHostSession(sessionObj);
+      logger.debug({ sessionId }, "Host session created");
 
-      // Attach session ID to request to be propagated by middleware on future API requests
-      req.query.sessionId = session.sessionId;
+      setPartySessionCookie(res, {
+        sessionId,
+        role: "host",
+        userId: hostData.userId,
+        displayName: hostData.displayName,
+        profileImageUrl: hostData.profileImageUrl,
+      });
 
-      // Obfuscate sessionId for logging
-      const obfuscatedSessionId = session.sessionId.slice(0, 6) + "***";
-      logger.info({ sessionId: obfuscatedSessionId }, "Host session created");
-
-      res.json({ sessionId: session.sessionId });
+      const frontendUrl =
+        process.env.FRONTEND_REDIRECT_URL;
+      res.redirect(`${frontendUrl}/dashboard`);
     } catch (err) {
-      logger.error({ err }, "Error during Spotify callback handling");
+      logger.error(
+        { err },
+        "Error during Spotify callback handling"
+      );
       res.status(500).send("Error processing Spotify callback");
     }
   };
 
-  // Pipeline-style host queue retrieval
-  const getQueue = (req, res) => {
-    const sessionId = req.query.sessionId;
+  /* ------------------------------------------------------------------
+   * Spotify actions (simple → promise chains)
+   * ------------------------------------------------------------------ */
 
-    sessionService
-      .getSession(sessionId, spotifyService.refreshAccessToken)
-      .then((session) => spotifyService.getQueue(session.accessToken))
+  const getQueueHandler = (req, res) => {
+    spotifyService
+      .getQueue(req.session)
       .then((queue) => res.json(queue))
       .catch((err) => {
         logger.error({ err }, "Failed to get Spotify queue");
-        res.status(500).send("Error fetching queue");
+        res
+          .status(500)
+          .json({ error: "Failed to get Spotify queue" });
+      });
+  };
+
+  const addToQueueHandler = (req, res) => {
+    const { trackUri } = req.body;
+
+    spotifyService
+      .addToQueue(req.session, trackUri)
+      .then((result) => res.json(result))
+      .catch((err) => {
+        logger.error(
+          { err, trackUri },
+          "Failed to add track to Spotify queue"
+        );
+        res
+          .status(500)
+          .json({ error: "Error adding track to Spotify queue" });
+      });
+  };
+
+  const findTracksHandler = (req, res) => {
+    spotifyService
+      .findTracks(req.session, req.query)
+      .then((tracks) => res.json(tracks))
+      .catch((err) => {
+        logger.error(
+          { err },
+          "Failed to perform Spotify track search"
+        );
+        res
+          .status(500)
+          .send("Error fetching tracks from search");
       });
   };
 
   return {
-    login,
-    callback,
-    getQueue,
+    loginHandler,
+    callbackHandler,
+    getQueueHandler,
+    addToQueueHandler,
+    findTracksHandler,
   };
 };
