@@ -1,17 +1,29 @@
-module.exports = (express, spotifyController) => {
-  const router = express.Router();
+// routes/spotify/spotifyRoutes.js
+//
+// Spotify feature routes.
+// Public OAuth routes are defined first,
+// followed by session-scoped routes protected by middleware.
 
-  // Middleware to propagate sessionId from query or header
-  const propagateSessionId = require("../../middleware/propagateSessionId")();
+module.exports = (router, requireSession, spotifyController) => {
+  /* ------------------------------------------------------------------
+   * Public routes (no session required)
+   * ------------------------------------------------------------------ */
 
-  // Public routes — no session needed
-  router.get('/login', spotifyController.login);
-  router.get('/callback', spotifyController.callback);
+  router.get("/login", spotifyController.loginHandler);
+  router.get("/callback", spotifyController.callbackHandler);
 
-  // Routes that require sessionId
-  router.get('/queue', propagateSessionId, spotifyController.getQueue);
-  // router.get('/search', propagateSessionId, spotifyController.searchTracks);
-  // router.post('/add', propagateSessionId, spotifyController.addToQueue);
+  /* ------------------------------------------------------------------
+   * Feature-scoped middleware
+   * ------------------------------------------------------------------ */
 
-  return router;
+  // All routes below this point require an active session
+  router.use(requireSession);
+
+  /* ------------------------------------------------------------------
+   * Session-scoped routes
+   * ------------------------------------------------------------------ */
+
+  router.get("/queue", spotifyController.getQueueHandler);
+  router.get("/search", spotifyController.findTracksHandler);
+  router.post("/add", spotifyController.addToQueueHandler);
 };
