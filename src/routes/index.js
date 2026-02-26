@@ -25,14 +25,10 @@ module.exports = ({
    * ------------------------------------------------------------------ */
 
   // Session routes (no auth required)
-  sessionRoutes(sessionRouter, sessionController);
+  sessionRoutes(sessionRouter, sessionController, requireSession);
 
   // Spotify routes (require active session)
-  spotifyRoutes(
-    spotifyRouter,
-    requireSession,
-    spotifyController
-  );
+  spotifyRoutes(spotifyRouter, requireSession, spotifyController);
 
   /* ------------------------------------------------------------------
    * Mount feature routers

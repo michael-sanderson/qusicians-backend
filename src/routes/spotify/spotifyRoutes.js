@@ -25,5 +25,6 @@ module.exports = (router, requireSession, spotifyController) => {
 
   router.get("/queue", spotifyController.getQueueHandler);
   router.get("/search", spotifyController.findTracksHandler);
-  router.post("/add", spotifyController.addToQueueHandler);
+  router.post("/add", spotifyController.addSongHandler);
+  router.post("/import-playlist", spotifyController.importPlaylistHandler);
 };

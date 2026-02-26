@@ -8,7 +8,6 @@ const express = require("express");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
 
-const C = require("./config/constants");
 const createRouter = require("./routes");
 const buildDependencies = require("./bootstrap/dependencies");
 
@@ -28,23 +27,24 @@ function createApp() {
     requireSession,
     sessionController,
     spotifyController,
+    errorResponder
   } = buildDependencies();
 
   /* ------------------------------------------------------------------
    * Global middleware
    * ------------------------------------------------------------------ */
 
-  // CORS — must come early
+  // CORS must come early
   app.use(
     cors({
-      origin: C.CORS_ORIGIN || "http://127.0.0.1:5173",
+      origin: process.env.CORS_ORIGIN || "http://127.0.0.1:5173",
       credentials: true,
     })
   );
 
   // Body parsing
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: "1mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
   // Cookie parsing (required for session handling)
   app.use(cookieParser());
@@ -66,6 +66,7 @@ function createApp() {
   });
 
   app.use(router);
+  app.use(errorResponder);
 
   return app;
 }
