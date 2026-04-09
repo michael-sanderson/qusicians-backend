@@ -6,6 +6,7 @@
 
 const COOKIE_NAME = "partySession";
 const isProduction = process.env.NODE_ENV === "production";
+const cookieDomain = isProduction ? process.env.COOKIE_DOMAIN || undefined : undefined;
 
 /* ------------------------------------------------------------------ */
 /* Cookie options                                                      */
@@ -17,6 +18,7 @@ const COOKIE_OPTIONS = {
   sameSite: isProduction ? "none" : "lax",
   maxAge: 24 * 60 * 60 * 1000,
   path: "/",
+  ...(cookieDomain ? { domain: cookieDomain } : {}),
 };
 
 /* ------------------------------------------------------------------ */
@@ -70,6 +72,7 @@ const clearSessionCookie = (res) => {
     secure: COOKIE_OPTIONS.secure,
     sameSite: COOKIE_OPTIONS.sameSite,
     path: COOKIE_OPTIONS.path,
+    ...(COOKIE_OPTIONS.domain ? { domain: COOKIE_OPTIONS.domain } : {}),
   });
 };
 
