@@ -6,11 +6,17 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "perf:full": "node ./tests/perf/runScenario.js full",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "nodemonConfig": {
+    "ignore": [
+      "tests/perf/output/*"
+    ]
+  },
   "dependencies": {
     "axios": "^1.13.1",
     "cookie-parser": "^1.4.7",
@@ -20,7 +26,8 @@
     "express": "^5.1.0",
     "pino": "^10.1.0",
     "pino-pretty": "^13.1.2",
-    "redis": "^5.9.0"
+    "redis": "^5.9.0",
+    "socket.io": "^4.8.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

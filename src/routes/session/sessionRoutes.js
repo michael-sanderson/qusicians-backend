@@ -1,9 +1,6 @@
 // routes/session/sessionRoutes.js
-//
-// Session lifecycle routes.
-// Handles joining and (eventually) leaving a session.
 
-module.exports = (router, sessionController) => {
+module.exports = (router, sessionController, requireSession) => {
   /* ------------------------------------------------------------------
    * Session entry
    * ------------------------------------------------------------------ */
@@ -11,13 +8,14 @@ module.exports = (router, sessionController) => {
   router.post("/join", sessionController.joinSessionHandler);
 
   /* ------------------------------------------------------------------
-   * Session exit (placeholder)
+   * Session exit
    * ------------------------------------------------------------------ */
 
-  // Explicit placeholder so the route contract exists
-  router.post("/leave", (req, res) => {
-    res.status(501).json({
-      error: "Leave session not implemented yet",
-    });
-  });
-};
+  router.post("/leave", requireSession, sessionController.leaveSessionHandler);
+
+  /* ------------------------------------------------------------------
+   * Session guests
+   * ------------------------------------------------------------------ */
+
+  router.get("/guests", requireSession, sessionController.getGuestListHandler);
+}; 

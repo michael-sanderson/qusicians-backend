@@ -1,76 +1,105 @@
 // controllers/sessionController.js
 //
-// Session lifecycle controller.
-// Handles joining a session and defines a placeholder for leaving.
+// Session HTTP handlers.
+// Delegates business rules to services and forwards errors to global error middleware.
 
 module.exports = (
   sessionService,
-  setPartySessionCookie,
+  creditService,
+  setSessionCookie,
+  clearSessionCookie,
   logger
 ) => {
   /* ------------------------------------------------------------------
    * Join session
    * ------------------------------------------------------------------ */
 
-  const joinSessionHandler = (req, res) => {
-    // Early exit: user already has a session
-    if (req.cookies?.partySession) {
-      const frontendUrl =
-        process.env.FRONTEND_REDIRECT_URL;
-      return res.redirect(`${frontendUrl}/dashboard`);
-    }
-
-    const { sessionId, name = "Guest" } = req.body;
+  const joinSessionHandler = (req, res, next) => {
+    const { sessionId, name = "Guest", avatarDataUrl = null } = req.body;
 
     if (!sessionId) {
-      logger.warn("Join session missing sessionId");
-      return res.status(400).send("Missing sessionId");
+      const err = new Error("Missing sessionId");
+      err.code = "MISSING_SESSION_ID";
+      return next(err);
     }
 
-    sessionService
-      .getSession(sessionId)
-      .then((session) =>
-        sessionService.addGuest(session, name)
-      )
-      .then((updatedSession) => {
-        setPartySessionCookie(res, {
-          sessionId: updatedSession.sessionId,
-          role: "guest",
-          displayName: name,
+    return sessionService
+      .joinSession(sessionId, name, avatarDataUrl)
+      .then((sessionEnvelope) => {
+        setSessionCookie(res, {
+          sessionId: sessionEnvelope.sessionId,
+          role: sessionEnvelope.role,
+          displayName: sessionEnvelope.displayName,
+          profileImageUrl: sessionEnvelope.profileImageUrl,
         });
-
-        const frontendUrl =
-          process.env.FRONTEND_REDIRECT_URL;
-        res.redirect(`${frontendUrl}/dashboard`);
+        return res.status(200).json({ success: true });
       })
       .catch((err) => {
-        logger.error(
-          { err, sessionId },
-          "Failed to join session"
-        );
-        res.status(500).send("Error joining session");
+        if (err?.code === "DISPLAY_NAME_TAKEN") {
+          logger.warn({ sessionId, name }, "Duplicate display name attempt");
+        }
+        return next(err);
       });
   };
 
   /* ------------------------------------------------------------------
-   * Leave session (placeholder)
+   * Leave session
    * ------------------------------------------------------------------ */
 
-  const leaveSessionHandler = (req, res) => {
-    logger.info(
-      { route: "/session/leave" },
-      "Leave session endpoint called (not implemented)"
-    );
+  const leaveSessionHandler = (req, res, next) => {
+    const op =
+      req.userRole === "host" && req.userId === req.session.hostId
+        ? sessionService.endSession(req.session.sessionId)
+        : req.displayName
+        ? sessionService.leaveSession(req.session.sessionId, req.displayName)
+        : Promise.resolve();
 
-    res.status(501).json({
-      error: "Leave session not implemented yet",
-    });
+    return op
+      .then(() => {
+        clearSessionCookie(res);
+        return res.status(204).end();
+      })
+      .catch((err) => {
+        // Keep leave idempotent
+        if (err?.code === "SESSION_NOT_FOUND") {
+          clearSessionCookie(res);
+          return res.status(204).end();
+        }
+
+        return next(err);
+      });
   };
 
-  /* ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------
+   * Get guest list
+   * ------------------------------------------------------------------ */
+
+  const getGuestListHandler = async (req, res, next) => {
+    try {
+      const guests = req.session.guests || [];
+      const guestEntries = await Promise.all(
+        guests.map(async (guest) => {
+          const credits = await creditService.getCredits(req.session.sessionId, {
+            role: "guest",
+            displayName: guest.name,
+          });
+
+          return {
+            name: guest.name,
+            avatarDataUrl: guest.avatarDataUrl || null,
+            creditsRemaining: credits.remaining,
+          };
+        })
+      );
+      return res.json({ guests: guestEntries });
+    } catch (err) {
+      return next(err);
+    }
+  };
 
   return {
     joinSessionHandler,
     leaveSessionHandler,
+    getGuestListHandler,
   };
 };
