@@ -5,6 +5,7 @@
 
 module.exports = (
   spotifyService,
+  realtimeQueueState,
   spotifyAuthUtil,
   oauthStateService,
   sessionService,
@@ -73,25 +74,42 @@ module.exports = (
     }
   };
 
-  const getQueueHandler = (req, res, next) =>
-    spotifyService
-      .getQueue(req.session)
-      .then((queue) => res.json(queue))
-      .catch((err) => {
-        logger.error({ err }, "Failed to get Spotify queue");
-        return next(new AppError("SPOTIFY_QUEUE_FETCH_FAILED"));
-      });
+  const getQueueHandler = async (req, res, next) => {
+    try {
+      const sessionId = req.session?.sessionId;
+      const snapshot = await realtimeQueueState.ensureFreshSnapshot(sessionId);
+
+      if (!snapshot) {
+        return next(new AppError("QUEUE_REALTIME_UNAVAILABLE"));
+      }
+
+      return res.json(snapshot);
+    } catch (err) {
+      if (err?.code === "QUEUE_REALTIME_UNAVAILABLE") {
+        return next(err);
+      }
+      logger.error({ err }, "Failed to get Spotify queue");
+      return next(new AppError("SPOTIFY_QUEUE_FETCH_FAILED"));
+    }
+  };
 
   const addSongHandler = (req, res, next) =>
     spotifyService
       .addSong(req.session, req.body?.trackUri, {
         role: req.userRole,
+        userId: req.userId,
         displayName: req.displayName,
         avatarDataUrl: req.avatarDataUrl,
-      })
+      }, req.body?.track || null)
       .then((result) => res.json(result))
       .catch((err) => {
-        if (err?.code === "INVALID_TRACK_URI") return next(err);
+        if (
+          err?.code === "INVALID_TRACK_URI" ||
+          err?.code === "NO_CREDITS" ||
+          err?.code === "CREDITS_IDENTITY_MISSING"
+        ) {
+          return next(err);
+        }
         logger.error({ err, trackUri: req.body?.trackUri }, "Failed to add track");
         return next(new AppError("SPOTIFY_ADD_FAILED"));
       });

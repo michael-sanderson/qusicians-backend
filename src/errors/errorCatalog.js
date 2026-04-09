@@ -69,6 +69,14 @@ const ERROR_CATALOG = {
     status: 400,
     message: "Missing or invalid track URI",
   },
+  NO_CREDITS: {
+    status: 429,
+    message: "No credits available yet",
+  },
+  CREDITS_IDENTITY_MISSING: {
+    status: 400,
+    message: "Unable to resolve client identity for credits",
+  },
   INVALID_SEARCH_QUERY: {
     status: 400,
     message: "Missing or invalid search query",
@@ -96,6 +104,10 @@ SPOTIFY_CALLBACK_FAILED: {
 SPOTIFY_QUEUE_FETCH_FAILED: {
   status: 500,
   message: "Failed to get Spotify queue",
+},
+QUEUE_REALTIME_UNAVAILABLE: {
+  status: 503,
+  message: "Realtime queue service is temporarily unavailable",
 },
 SPOTIFY_ADD_FAILED: {
   status: 500,

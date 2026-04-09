@@ -21,6 +21,16 @@ module.exports = {
   },
 
   /* ------------------------------------------------------------------
+   * Per-actor add-credit policy
+   * ------------------------------------------------------------------ */
+
+  CREDITS: {
+    MAX: 3,
+    REFILL_INTERVAL_SECONDS: 5 * 60,
+    KEY_PREFIX: "Qusicians:credits:",
+  },
+
+  /* ------------------------------------------------------------------
    * Spotify API configuration
    * ------------------------------------------------------------------ */
 
@@ -37,5 +47,17 @@ module.exports = {
       "user-modify-playback-state",
       "user-read-currently-playing",
     ].join(" "),
+  },
+
+  SPOTIFY_GATEWAY: {
+    MAX_CONCURRENT: 1,
+    MIN_INTERVAL_MS: 75,
+    MAX_RETRIES: 1,
+    RETRY_BASE_DELAY_MS: 1000,
+  },
+
+  SPOTIFY_SEARCH_CACHE: {
+    TTL_MS: 30 * 1000,
+    MAX_ENTRIES: 200,
   },
 };

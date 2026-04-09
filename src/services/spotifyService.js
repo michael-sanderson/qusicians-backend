@@ -3,7 +3,47 @@
 // Spotify API boundary.
 // Ensures all Spotify calls run with a valid access token.
 
-module.exports = (axios, config, persistSession, logger, AppError) => {
+module.exports = (
+  spotifyGateway,
+  config,
+  realtimeQueueState,
+  getSession,
+  persistSession,
+  appendPendingTrack,
+  creditService,
+  perfMetrics,
+  logger,
+  AppError
+) => {
+  const {
+    resolveAddedBy,
+    normalizeAddedBy,
+    normalizeAttributions,
+    resolveGuestByName,
+  } = require("./spotify/attributionUtils");
+  const {
+    formatTrack,
+    normalizeTrackMeta,
+    resolvePlaylistId,
+  } = require("./spotify/trackUtils");
+  const createSearchService = require("./spotify/searchService");
+
+  const CONFIRMED_TRACK_RETENTION_MS = 20 * 60 * 1000;
+  const MAX_STAGED_CONFIRMED_TRACKS = 200;
+  const flushStateBySession = new Map();
+  const spotifyAuthHeaders = (accessToken, extraHeaders = {}) => ({
+    Authorization: `Bearer ${accessToken}`,
+    ...extraHeaders,
+  });
+  const searchService = createSearchService({
+    spotifyGateway,
+    config,
+    logger,
+    AppError,
+    formatTrack,
+    spotifyAuthHeaders,
+    perfMetrics,
+  });
   /* ------------------------------------------------------------------
    * Public API (used by controllers)
    * ------------------------------------------------------------------ */
@@ -19,12 +59,15 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
         client_secret: config.clientSecret,
       }).toString();
 
-      const res = await axios.request({
-        method: "POST",
-        url: config.SPOTIFY.TOKEN_URL,
-        data: payload,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      });
+      const res = await spotifyGateway.request(
+        {
+          method: "POST",
+          url: config.SPOTIFY.TOKEN_URL,
+          data: payload,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        },
+        { operation: "oauth_token_exchange", priority: "high" }
+      );
 
       logger.debug("Spotify token exchange successful");
       return res.data;
@@ -38,9 +81,13 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
   const getCurrentUser = async (accessToken) => {
     try {
       // 1) Fetch basic user profile
-      const userRes = await axios.get(`${config.SPOTIFY.API_BASE_URL}/me`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const userRes = await spotifyGateway.get(
+        `${config.SPOTIFY.API_BASE_URL}/me`,
+        {
+          headers: spotifyAuthHeaders(accessToken),
+        },
+        { operation: "fetch_current_user", priority: "normal" }
+      );
 
       const userId = userRes.data.id;
       const profileImageUrl = userRes.data.images?.[0]?.url || null;
@@ -48,9 +95,10 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
       logger.debug({ userId }, "Fetched current Spotify user");
 
       // 2) Fetch the user's playlists
-      const playlistsRes = await axios.get(
+      const playlistsRes = await spotifyGateway.get(
         `${config.SPOTIFY.API_BASE_URL}/me/playlists?limit=50`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
+        { headers: spotifyAuthHeaders(accessToken) },
+        { operation: "fetch_user_playlists", priority: "normal" }
       );
 
       const existingPlaylist = playlistsRes.data.items.find(
@@ -61,10 +109,11 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
       const playlist = existingPlaylist
         ? existingPlaylist
         : (
-            await axios.post(
+            await spotifyGateway.post(
               `${config.SPOTIFY.API_BASE_URL}/users/${userId}/playlists`,
               { name: "Qusicians", public: false },
-              { headers: { Authorization: `Bearer ${accessToken}` } }
+              { headers: spotifyAuthHeaders(accessToken) },
+              { operation: "create_qusicians_playlist", priority: "normal" }
             )
           ).data;
 
@@ -96,36 +145,53 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
   const getQueue = async (session) => {
     try {
       const validSession = await ensureValidSession(session);
+      const normalizedSession = ensureTrackQueueState(validSession);
 
-      const res = await axios.get(`${config.SPOTIFY.API_BASE_URL}/me/player/queue`, {
-        headers: {
-          Authorization: `Bearer ${validSession.accessToken}`,
+      const res = await spotifyGateway.get(
+        `${config.SPOTIFY.API_BASE_URL}/me/player/queue`,
+        {
+          headers: spotifyAuthHeaders(validSession.accessToken),
         },
-      });
+        { operation: "fetch_queue_snapshot", priority: "high" }
+      );
 
       const { currently_playing, queue } = res.data;
       const nowPlayingTrack = formatTrack(currently_playing);
       const queueTracks = queue.map(formatTrack);
       const trackAttributions = normalizeAttributions(
-        validSession.trackAttributions
+        normalizedSession.trackAttributions
       );
       const decorated = decorateWithAttribution(
         nowPlayingTrack,
         queueTracks,
         trackAttributions
       );
-      const previousSnapshot = validSession.currentNowPlayingSnapshot || null;
+      const previousSnapshot = normalizedSession.currentNowPlayingSnapshot || null;
       const previousUri = previousSnapshot?.uri || null;
       const currentUri = decorated.nowPlaying?.uri || null;
       const hasTrackTransition = previousUri !== currentUri;
       const lastPlayedTrack =
         hasTrackTransition && previousSnapshot?.uri
           ? previousSnapshot
-          : validSession.lastPlayedTrack || null;
+          : normalizedSession.lastPlayedTrack || null;
 
-      if (hasTrackTransition) {
+      const cleanedConfirmedTracks = pruneStagedConfirmedTracks(
+        normalizedSession.confirmedTracks,
+        decorated
+      );
+      const pendingQueue = normalizePendingTracksForClient(normalizedSession.pendingTracks);
+      const confirmedStagedQueue = normalizeConfirmedTracksForClient(cleanedConfirmedTracks);
+      const confirmedQueue = [...confirmedStagedQueue, ...decorated.queue];
+
+      const shouldPersistQueueState =
+        cleanedConfirmedTracks.length !== (normalizedSession.confirmedTracks || []).length;
+
+      if (hasTrackTransition || shouldPersistQueueState) {
+        await grantCreditForPlayedTrack(validSession, previousSnapshot);
+
         await persistSession({
-          ...validSession,
+          ...normalizedSession,
+          confirmedTracks: cleanedConfirmedTracks,
           currentNowPlayingSnapshot: decorated.nowPlaying || null,
           lastPlayedTrack,
         });
@@ -133,8 +199,10 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
 
       return {
         nowPlaying: decorated.nowPlaying,
-        upNext: decorated.queue[0] ?? null,
-        queue: decorated.queue,
+        upNext: confirmedQueue[0] ?? null,
+        queue: confirmedQueue,
+        pendingQueue,
+        confirmedQueue,
         lastPlayed: lastPlayedTrack,
       };
     } catch (err) {
@@ -151,41 +219,49 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
   };
 
   // Add a track to the Qusicians playlist.
-  const addSong = async (session, trackUri, actor = {}) => {
+  const addSong = async (session, trackUri, actor = {}, trackMeta = null) => {
     if (!trackUri || typeof trackUri !== "string") {
       throw new AppError("INVALID_TRACK_URI");
     }
 
     try {
       const validSession = await ensureValidSession(session);
+      const normalizedSession = ensureTrackQueueState(validSession);
+      const creditResult = await creditService.consumeCredit(validSession.sessionId, actor);
 
-      const res = await axios.post(
-        `${config.SPOTIFY.API_BASE_URL}/playlists/${validSession.playlistId}/items`,
-        { uris: [trackUri] },
-        {
-          headers: {
-            Authorization: `Bearer ${validSession.accessToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      if (!creditResult.allowed) {
+        const err = new AppError("NO_CREDITS");
+        err.nextRefillAt = creditResult.nextRefillAt;
+        err.creditsRemaining = creditResult.remaining;
+        throw err;
+      }
 
       const guest =
         actor?.role === "guest"
-          ? resolveGuestByName(validSession.guests, actor.displayName)
+          ? resolveGuestByName(normalizedSession.guests, actor.displayName)
           : null;
-      const trackAttributions = {
-        ...normalizeAttributions(validSession.trackAttributions),
-        [trackUri]: resolveAddedBy(actor, guest, validSession.hostProfileImageUrl),
+      const addedBy = resolveAddedBy(actor, guest, normalizedSession.hostProfileImageUrl);
+      const normalizedTrackMeta = normalizeTrackMeta(trackMeta);
+      const pendingId = buildPendingTrackId();
+      const pendingTrack = {
+        id: pendingId,
+        uri: trackUri,
+        title: normalizedTrackMeta?.title || null,
+        artist: normalizedTrackMeta?.artist || null,
+        album: normalizedTrackMeta?.album || null,
+        artwork: normalizedTrackMeta?.artwork || null,
+        addedBy,
+        requestedAt: Date.now(),
       };
+      await appendPendingTrack(validSession.sessionId, pendingTrack, addedBy);
 
-      await persistSession({
-        ...validSession,
-        trackAttributions,
-      });
-
-      logger.info({ trackUri }, "Added track to Spotify playlist");
-      return res.data;
+      logger.info({ trackUri }, "Accepted track into pending batch queue");
+      return {
+        success: true,
+        pending: true,
+        creditsRemaining: creditResult.remaining,
+        pendingTrackId: pendingId,
+      };
     } catch (err) {
       logger.error({ err, trackUri }, "Failed to add track to Spotify playlist");
       throw err;
@@ -193,38 +269,8 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
   };
 
   // Search Spotify tracks.
-  const findTracks = async (session, query) => {
-    const q = typeof query === "string" ? query.trim() : query?.q?.trim();
-
-    if (!q) {
-      throw new AppError("INVALID_SEARCH_QUERY");
-    }
-
-    try {
-      const validSession = await ensureValidSession(session);
-
-      const res = await axios.get(`${config.SPOTIFY.API_BASE_URL}/search`, {
-        headers: {
-          Authorization: `Bearer ${validSession.accessToken}`,
-        },
-        params: { q, type: "track", limit: 50 },
-      });
-
-      logger.info({ q }, "Spotify track search successful");
-      return res.data.tracks.items.map(formatTrack);
-    } catch (err) {
-      logger.error(
-        {
-          message: err.message,
-          status: err.response?.status,
-          data: err.response?.data,
-          query: q,
-        },
-        "Spotify track search failed"
-      );
-      throw err;
-    }
-  };
+  const findTracks = (session, query) =>
+    searchService.findTracks(session, query, ensureValidSession);
 
   const importPlaylist = async (session, sourcePlaylistIdOrUrl) => {
     const sourcePlaylistId = resolvePlaylistId(sourcePlaylistIdOrUrl);
@@ -298,12 +344,15 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
         client_secret: config.clientSecret,
       }).toString();
 
-      const res = await axios.request({
-        method: "POST",
-        url: config.SPOTIFY.TOKEN_URL,
-        data: payload,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      });
+      const res = await spotifyGateway.request(
+        {
+          method: "POST",
+          url: config.SPOTIFY.TOKEN_URL,
+          data: payload,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        },
+        { operation: "refresh_access_token", priority: "high" }
+      );
 
       logger.info("Spotify access token refreshed");
       return res.data;
@@ -337,39 +386,6 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
     return updatedSession;
   };
 
-  // Normalize Spotify track objects into app-friendly shape.
-  const formatTrack = (track) => {
-    if (!track) return null;
-
-    return {
-      title: track.name,
-      artist: track.artists[0].name,
-      album: track.album.name,
-      artwork: track.album.images[0].url,
-      uri: track.uri,
-    };
-  };
-
-  const resolveAddedBy = (actor, guest, hostProfileImageUrl = null) => {
-    if (actor?.role === "host") {
-      return {
-        name: "Host",
-        role: "host",
-        avatarDataUrl: hostProfileImageUrl,
-      };
-    }
-
-    const name =
-      typeof actor?.displayName === "string" ? actor.displayName.trim() : "";
-    const avatarDataUrl = guest?.avatarDataUrl || actor?.avatarDataUrl || null;
-
-    return {
-      name: name || "Host",
-      role: "guest",
-      avatarDataUrl,
-    };
-  };
-
   // Match attribution metadata to visible tracks.
   const decorateWithAttribution = (nowPlaying, queue, attributions = {}) => {
     const visible = [nowPlaying, ...queue].filter(Boolean);
@@ -392,77 +408,164 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
     };
   };
 
-  const normalizeAttributions = (raw) => {
-    if (!raw) return {};
+  const resolveCreditActorForPlayedTrack = (session, track) => {
+    const role = track?.addedBy?.role;
 
-    if (Array.isArray(raw)) {
-      return raw.reduce((acc, entry) => {
-        if (entry?.uri) {
-          acc[entry.uri] = normalizeAddedBy(entry.addedBy);
-        }
-        return acc;
-      }, {});
-    }
-
-    if (typeof raw === "object") {
-      return Object.keys(raw).reduce((acc, uri) => {
-        acc[uri] = normalizeAddedBy(raw[uri]);
-        return acc;
-      }, {});
-    }
-
-    return {};
-  };
-
-  const normalizeAddedBy = (value) => {
-    if (!value) {
+    if (role === "host") {
       return {
-        name: "Host",
         role: "host",
-        avatarDataUrl: null,
+        userId: session.hostId,
       };
     }
 
-    if (typeof value === "string") {
+    if (role === "guest") {
+      const displayName =
+        typeof track?.addedBy?.name === "string" ? track.addedBy.name.trim() : "";
+
+      if (!displayName) return null;
+
       return {
-        name: value.trim() || "Host",
-        role: value.trim().toLowerCase() === "host" ? "host" : "guest",
-        avatarDataUrl: null,
+        role: "guest",
+        displayName,
       };
     }
 
-    return {
-      name: value.name || "Host",
-      role: value.role || "guest",
-      avatarDataUrl: value.avatarDataUrl || null,
-    };
+    return null;
   };
 
-  const resolveGuestByName = (guests, displayName) => {
-    const normalizedDisplayName =
-      typeof displayName === "string" ? displayName.trim().toLowerCase() : "";
+  const grantCreditForPlayedTrack = async (session, previousSnapshot) => {
+    if (!previousSnapshot?.uri) return;
 
-    if (!normalizedDisplayName || !Array.isArray(guests)) {
-      return null;
+    const actor = resolveCreditActorForPlayedTrack(session, previousSnapshot);
+    if (!actor) return;
+
+    try {
+      await creditService.grantCredit(session.sessionId, actor);
+      logger.debug(
+        { sessionId: session.sessionId, role: actor.role, trackUri: previousSnapshot.uri },
+        "Granted credit after track transitioned"
+      );
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.sessionId, trackUri: previousSnapshot.uri },
+        "Failed to grant play-based credit"
+      );
     }
-
-    return (
-      guests.find(
-        (guest) =>
-          typeof guest?.name === "string" &&
-          guest.name.trim().toLowerCase() === normalizedDisplayName
-      ) || null
-    );
   };
 
-  const resolvePlaylistId = (input) => {
-    if (typeof input !== "string") return null;
+  const ensureTrackQueueState = (session) => ({
+    ...session,
+    pendingTracks: Array.isArray(session.pendingTracks) ? session.pendingTracks : [],
+    confirmedTracks: Array.isArray(session.confirmedTracks) ? session.confirmedTracks : [],
+  });
 
-    const trimmed = input.trim();
+  const normalizePendingTracksForClient = (pendingTracks = []) =>
+    pendingTracks.map((track) => ({
+      id: track.id,
+      uri: track.uri,
+      title: track.title || "Pending track",
+      artist: track.artist || "Awaiting Spotify flush",
+      album: track.album || "",
+      artwork: track.artwork || null,
+      addedBy: normalizeAddedBy(track.addedBy),
+      status: "pending",
+    }));
 
-    if (!trimmed) return null;
+  const normalizeConfirmedTracksForClient = (confirmedTracks = []) =>
+    confirmedTracks.map((track) => ({
+      id: track.id,
+      uri: track.uri,
+      title: track.title || "Queued track",
+      artist: track.artist || "Recently confirmed",
+      album: track.album || "",
+      artwork: track.artwork || null,
+      addedBy: normalizeAddedBy(track.addedBy),
+      status: "confirmed",
+    }));
 
-    return /^[A-Za-z0-9]{22}$/.test(trimmed) ? trimmed : null;
+  const pruneStagedConfirmedTracks = (confirmedTracks = [], decoratedQueue) => {
+    const spotifyUris = new Set(
+      [decoratedQueue?.nowPlaying, ...(decoratedQueue?.queue || [])]
+        .filter(Boolean)
+        .map((track) => track.uri)
+    );
+
+    const now = Date.now();
+    return confirmedTracks
+      .filter((track) => track?.uri && !spotifyUris.has(track.uri))
+      .filter((track) => now - (track.confirmedAt || now) <= CONFIRMED_TRACK_RETENTION_MS)
+      .slice(-MAX_STAGED_CONFIRMED_TRACKS);
+  };
+
+  const buildPendingTrackId = () =>
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const getOrCreateFlushState = (sessionId) => {
+    const existing = flushStateBySession.get(sessionId);
+    if (existing) return existing;
+
+    const state = {
+      inFlight: false,
+    };
+    flushStateBySession.set(sessionId, state);
+    return state;
+  };
+
+  const flushPendingTracks = async (sessionId) => {
+    const state = getOrCreateFlushState(sessionId);
+    if (state.inFlight) return;
+
+    state.inFlight = true;
+    try {
+      const originalSession = await getSession(sessionId);
+      const validSession = await ensureValidSession(originalSession);
+      const normalized = ensureTrackQueueState(validSession);
+
+      if (normalized.pendingTracks.length === 0) {
+        return;
+      }
+
+      const chunk = normalized.pendingTracks.slice();
+      const uris = chunk.map((track) => track.uri).filter(Boolean);
+      if (uris.length === 0) {
+        const updated = {
+          ...normalized,
+          pendingTracks: normalized.pendingTracks.slice(chunk.length),
+        };
+        await persistSession(updated);
+        return;
+      }
+
+      await appendTracksToPlaylist(
+        normalized.accessToken,
+        normalized.playlistId,
+        uris
+      );
+      perfMetrics?.increment(["flush", "completed"]);
+      perfMetrics?.increment(["flush", "tracks"], chunk.length);
+
+      const remainingPending = normalized.pendingTracks.slice(chunk.length);
+      const stagedConfirmed = [
+        ...normalized.confirmedTracks,
+        ...chunk.map((track) => ({
+          ...track,
+          confirmedAt: Date.now(),
+        })),
+      ].slice(-MAX_STAGED_CONFIRMED_TRACKS);
+
+      await persistSession({
+        ...normalized,
+        pendingTracks: remainingPending,
+        confirmedTracks: stagedConfirmed,
+      });
+
+    } catch (err) {
+      perfMetrics?.increment(["flush", "failed"]);
+      logger.warn({ err, sessionId }, "Batch flush to Spotify failed");
+    } finally {
+      const latestState = getOrCreateFlushState(sessionId);
+      latestState.inFlight = false;
+    }
   };
 
   const mapSpotifyImportError = (err) => {
@@ -494,14 +597,18 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
   };
 
   const fetchSourcePlaylistTrackUris = async (accessToken, playlistId) => {
-    const firstPage = await axios
-      .get(`${config.SPOTIFY.API_BASE_URL}/playlists/${playlistId}/items`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: {
-          limit: 100,
-          fields: "items(track(uri)),next",
+    const firstPage = await spotifyGateway
+      .get(
+        `${config.SPOTIFY.API_BASE_URL}/playlists/${playlistId}/items`,
+        {
+          headers: spotifyAuthHeaders(accessToken),
+          params: {
+            limit: 100,
+            fields: "items(track(uri)),next",
+          },
         },
-      })
+        { operation: "fetch_source_playlist_page", priority: "low" }
+      )
       .catch((err) => {
         err.phase = "fetch_source_playlist";
         throw err;
@@ -520,10 +627,14 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
       return acc;
     }
 
-    const page = await axios
-      .get(nextUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      })
+    const page = await spotifyGateway
+      .get(
+        nextUrl,
+        {
+          headers: spotifyAuthHeaders(accessToken),
+        },
+        { operation: "fetch_source_playlist_page", priority: "low" }
+      )
       .catch((err) => {
         err.phase = "fetch_source_playlist";
         throw err;
@@ -547,16 +658,16 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
 
     const chunk = uris.slice(offset, offset + 100);
 
-    await axios
+    await spotifyGateway
       .post(
         `${config.SPOTIFY.API_BASE_URL}/playlists/${targetPlaylistId}/items`,
         { uris: chunk },
         {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
+          headers: spotifyAuthHeaders(accessToken, {
             "Content-Type": "application/json",
-          },
-        }
+          }),
+        },
+        { operation: "append_tracks_to_playlist", priority: "high" }
       )
       .catch((err) => {
         err.phase = "append_target_playlist";
@@ -573,6 +684,7 @@ module.exports = (axios, config, persistSession, logger, AppError) => {
     getCurrentUser,
     getQueue,
     addSong,
+    flushPendingTracks,
     findTracks,
     importPlaylist,
   };

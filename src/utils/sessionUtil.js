@@ -5,6 +5,7 @@
 // No knowledge of Redis, services, or HTTP routing.
 
 const COOKIE_NAME = "partySession";
+const isProduction = process.env.NODE_ENV === "production";
 
 /* ------------------------------------------------------------------ */
 /* Cookie options                                                      */
@@ -12,8 +13,8 @@ const COOKIE_NAME = "partySession";
 
 const COOKIE_OPTIONS = {
   httpOnly: false, // intentional: frontend needs access
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax",
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
   maxAge: 24 * 60 * 60 * 1000,
   path: "/",
 };
@@ -66,6 +67,8 @@ const setSessionCookie = (res, sessionPayload) => {
 
 const clearSessionCookie = (res) => {
   res.clearCookie(COOKIE_NAME, {
+    secure: COOKIE_OPTIONS.secure,
+    sameSite: COOKIE_OPTIONS.sameSite,
     path: COOKIE_OPTIONS.path,
   });
 };

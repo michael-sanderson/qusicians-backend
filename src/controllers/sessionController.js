@@ -3,7 +3,13 @@
 // Session HTTP handlers.
 // Delegates business rules to services and forwards errors to global error middleware.
 
-module.exports = (sessionService, setSessionCookie, clearSessionCookie, logger) => {
+module.exports = (
+  sessionService,
+  creditService,
+  setSessionCookie,
+  clearSessionCookie,
+  logger
+) => {
   /* ------------------------------------------------------------------
    * Join session
    * ------------------------------------------------------------------ */
@@ -68,13 +74,23 @@ module.exports = (sessionService, setSessionCookie, clearSessionCookie, logger) 
    * Get guest list
    * ------------------------------------------------------------------ */
 
-  const getGuestListHandler = (req, res, next) => {
+  const getGuestListHandler = async (req, res, next) => {
     try {
       const guests = req.session.guests || [];
-      const guestEntries = guests.map((guest) => ({
-        name: guest.name,
-        avatarDataUrl: guest.avatarDataUrl || null,
-      }));
+      const guestEntries = await Promise.all(
+        guests.map(async (guest) => {
+          const credits = await creditService.getCredits(req.session.sessionId, {
+            role: "guest",
+            displayName: guest.name,
+          });
+
+          return {
+            name: guest.name,
+            avatarDataUrl: guest.avatarDataUrl || null,
+            creditsRemaining: credits.remaining,
+          };
+        })
+      );
       return res.json({ guests: guestEntries });
     } catch (err) {
       return next(err);

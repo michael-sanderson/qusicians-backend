@@ -18,3 +18,7 @@ Thumbs.db
 # Optional: build outputs
 dist/
 build/
+
+# Perf outputs
+tests/perf/output/
+

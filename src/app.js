@@ -10,6 +10,8 @@ const cors = require("cors");
 
 const createRouter = require("./routes");
 const buildDependencies = require("./bootstrap/dependencies");
+const createPerfHttpMetricsMiddleware = require("../tests/perf/httpMetricsMiddleware");
+const createPerfRouter = require("../tests/perf/router");
 
 // Feature route factories
 const sessionRoutes = require("./routes/session/sessionRoutes");
@@ -17,18 +19,20 @@ const spotifyRoutes = require("./routes/spotify/spotifyRoutes");
 
 /* ------------------------------------------------------------------ */
 
-function createApp() {
+function createApp(prebuiltDependencies = null) {
   // Create express instance
   const app = express();
 
   // Build application dependencies (services, controllers, middleware)
   const {
+    perfMetrics,
     requestLogger,
     requireSession,
     sessionController,
     spotifyController,
     errorResponder
-  } = buildDependencies();
+  } = prebuiltDependencies || buildDependencies();
+  const perfHttpMetricsMiddleware = createPerfHttpMetricsMiddleware(perfMetrics);
 
   /* ------------------------------------------------------------------
    * Global middleware
@@ -51,6 +55,7 @@ function createApp() {
 
   // Request logging (after parsers so metadata is available)
   app.use(requestLogger);
+  app.use(perfHttpMetricsMiddleware);
 
   /* ------------------------------------------------------------------
    * Routes
@@ -65,6 +70,9 @@ function createApp() {
     spotifyRoutes,
   });
 
+  if (perfMetrics?.enabled) {
+    app.use("/__perf", createPerfRouter(express, perfMetrics));
+  }
   app.use(router);
   app.use(errorResponder);
 
@@ -74,3 +82,4 @@ function createApp() {
 /* ------------------------------------------------------------------ */
 
 module.exports = createApp;
+

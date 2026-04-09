@@ -17,5 +17,8 @@ module.exports = (toHttpError, logger) => (err, req, res, next) => {
   return res.status(httpErr.status).json({
     error: httpErr.message,
     code: httpErr.code,
+    ...(httpErr.meta && Object.keys(httpErr.meta).length > 0
+      ? { meta: httpErr.meta }
+      : {}),
   });
 };
