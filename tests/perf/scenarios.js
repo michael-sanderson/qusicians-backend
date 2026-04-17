@@ -117,11 +117,18 @@ const scenarioCatalog = {
           })
         : [];
       const warmupSearch = warmupResults[0] || null;
-      const firstTrack =
-        warmupSearch?.ok && Array.isArray(warmupSearch.data) ? warmupSearch.data[0] : null;
+      const uniqueTracks =
+        warmupSearch?.ok && Array.isArray(warmupSearch.data)
+          ? Array.from(
+              warmupSearch.data
+                .filter((track) => track?.uri)
+                .reduce((tracksByUri, track) => tracksByUri.set(track.uri, track), new Map())
+                .values()
+            )
+          : [];
 
-      if (!firstTrack) {
-        log("No prefetched track available. Add burst skipped.");
+      if (uniqueTracks.length === 0) {
+        log("No prefetched tracks available. Add burst skipped.");
         printSectionDivider();
 
         return {
@@ -134,15 +141,20 @@ const scenarioCatalog = {
         };
       }
 
-      log(`Add burst track uri: ${firstTrack.uri}`);
+      log(`Add burst unique prefetched tracks: ${uniqueTracks.length}`);
+      log(
+        "Guests are assigned prefetched tracks round-robin so the burst exercises batch flush ordering while duplicate URI protection still gets hit if guests exceed unique results."
+      );
       printSectionDivider();
 
       const addResults = await runTrackedBatch({
         items: bootstrapGuests,
         label: "Add burst phase",
         noun: "adds",
-        worker: (guest) => addGuestTrack(guest, firstTrack),
+        worker: (guest, index) => addGuestTrack(guest, uniqueTracks[index % uniqueTracks.length]),
       });
+      const duplicateResponses = addResults.filter((result) => result?.data?.duplicate).length;
+      const pendingResponses = addResults.filter((result) => result?.data?.pending).length;
 
       return {
         bootstrappedGuests: bootstrapGuests,
@@ -150,7 +162,12 @@ const scenarioCatalog = {
         meta: {
           query: sharedQuery,
           prefetchedTrack: true,
-          trackUri: firstTrack.uri,
+          uniqueTrackCount: uniqueTracks.length,
+          requestedTrackCount: bootstrapGuests.length,
+          expectedDuplicateRequests: Math.max(0, bootstrapGuests.length - uniqueTracks.length),
+          duplicateResponses,
+          pendingResponses,
+          sampleTrackUris: uniqueTracks.slice(0, 5).map((track) => track.uri),
         },
       };
     },

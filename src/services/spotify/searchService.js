@@ -47,32 +47,29 @@ module.exports = ({
         return inFlightSearch;
       }
 
-      const validSession = await ensureValidSession(session);
-
-      const searchRequest = spotifyGateway
-        .get(
+      const searchRequest = (async () => {
+        const validSession = await ensureValidSession(session);
+        const res = await spotifyGateway.get(
           `${config.SPOTIFY.API_BASE_URL}/search`,
           {
             headers: spotifyAuthHeaders(validSession.accessToken),
             params: { q, type: "track", limit: 50 },
           },
           { operation: "search_tracks", priority: "low" }
-        )
-        .then((res) => {
-          const formattedTracks = res.data.tracks.items.map(formatTrack);
+        );
+        const formattedTracks = res.data.tracks.items.map(formatTrack);
 
-          searchCache.set(normalizedQuery, formattedTracks);
-          perfMetrics?.increment(["search", "cache", "miss"]);
-          perfMetrics?.increment(["search", "dedupe", "miss"]);
-          logger.info(
-            { query: q, normalizedQuery, cache: "miss", dedupe: "miss" },
-            "Spotify track search successful"
-          );
-          return formattedTracks;
-        })
-        .finally(() => {
-          inFlightSearches.delete(normalizedQuery);
-        });
+        searchCache.set(normalizedQuery, formattedTracks);
+        perfMetrics?.increment(["search", "cache", "miss"]);
+        perfMetrics?.increment(["search", "dedupe", "miss"]);
+        logger.info(
+          { query: q, normalizedQuery, cache: "miss", dedupe: "miss" },
+          "Spotify track search successful"
+        );
+        return formattedTracks;
+      })().finally(() => {
+        inFlightSearches.delete(normalizedQuery);
+      });
 
       inFlightSearches.set(normalizedQuery, searchRequest);
       return searchRequest;

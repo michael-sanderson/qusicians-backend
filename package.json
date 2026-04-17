@@ -7,7 +7,15 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "perf:full": "node ./tests/perf/runScenario.js full",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest --runInBand",
+    "test:unit": "jest --runInBand tests/unit",
+    "test:services": "jest --runInBand tests/unit/services",
+    "test:controllers": "jest --runInBand tests/unit/controllers",
+    "test:middleware": "jest --runInBand tests/unit/middleware",
+    "test:app": "jest --runInBand tests/unit/app",
+    "test:perf": "node ./tests/perf/runScenario.js full",
+    "test:spotify": "jest --runInBand tests/unit/services/spotify tests/unit/services/spotifyService.test.js",
+    "test:utils": "jest --runInBand tests/unit/utils tests/unit/services/spotify/utils.test.js"
   },
   "keywords": [],
   "author": "",
@@ -30,6 +38,8 @@
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
+    "jest": "^30.3.0",
+    "nodemon": "^3.1.10",
+    "supertest": "^7.2.2"
   }
 }
