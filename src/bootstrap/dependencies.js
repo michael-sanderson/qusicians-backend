@@ -141,6 +141,7 @@ function buildDependencies() {
   const sessionController = createSessionController(
     sessionService,
     creditService,
+    realtimeQueueState,
     setSessionCookie,
     clearSessionCookie,
     logger

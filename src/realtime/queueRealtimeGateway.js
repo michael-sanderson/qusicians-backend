@@ -97,8 +97,7 @@ module.exports = (
       await refreshSnapshotOnce(sessionId);
     } catch (err) {
       if (err?.code === "SESSION_NOT_FOUND") {
-        io.to(roomName(sessionId)).emit("session:ended", { sessionId });
-        stopPoller(sessionId);
+        notifySessionEnded(sessionId, "session_not_found");
         return;
       }
 
@@ -140,6 +139,13 @@ module.exports = (
     if (!room || room.size === 0) {
       stopPoller(sessionId);
     }
+  };
+
+  const notifySessionEnded = (sessionId, reason = "session_ended") => {
+    if (!sessionId) return;
+
+    io.to(roomName(sessionId)).emit("session:ended", { sessionId, reason });
+    stopPoller(sessionId);
   };
 
   io.on("connection", async (socket) => {
@@ -210,6 +216,7 @@ module.exports = (
       return null;
     }
   };
+  realtimeQueueState.notifySessionEnded = notifySessionEnded;
 
   return {
     io,
