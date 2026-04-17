@@ -265,6 +265,7 @@ module.exports = (
         return {
           success: true,
           duplicate: true,
+          duplicateReason: appendResult.duplicateReason || "pending",
           pending: false,
           creditsRemaining: credits.remaining,
           existingPendingTrackId: appendResult.existingPendingTrackId || null,

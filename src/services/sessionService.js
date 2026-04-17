@@ -106,10 +106,21 @@ for i = 1, #pendingTracks do
     return cjson.encode({
       ok = true,
       duplicate = true,
+      duplicateReason = "pending",
       existingPendingTrackId = existingTrack.id,
       requestedBy = existingTrack.addedBy
     })
   end
+end
+
+if trackAttributions[pendingTrack.uri] then
+  return cjson.encode({
+    ok = true,
+    duplicate = true,
+    duplicateReason = "previously_requested",
+    existingPendingTrackId = cjson.null,
+    requestedBy = trackAttributions[pendingTrack.uri]
+  })
 end
 
 table.insert(pendingTracks, pendingTrack)
@@ -274,6 +285,7 @@ return cjson.encode({ ok = true, removed = removed })
       return {
         appended: false,
         duplicate: true,
+        duplicateReason: result.duplicateReason || "pending",
         existingPendingTrackId: result.existingPendingTrackId || null,
         requestedBy: result.requestedBy || null,
       };
