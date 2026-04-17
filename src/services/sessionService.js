@@ -146,19 +146,26 @@ end
 
 local session = cjson.decode(raw)
 local pendingTracks = session.pendingTracks or {}
+local trackAttributions = session.trackAttributions or {}
 local nextPendingTracks = {}
 local removed = false
+local removedUri = nil
 
 for i = 1, #pendingTracks do
   local track = pendingTracks[i]
   if track.id == pendingTrackId then
     removed = true
+    removedUri = track.uri
   else
     table.insert(nextPendingTracks, track)
   end
 end
 
 session.pendingTracks = nextPendingTracks
+if removedUri then
+  trackAttributions[removedUri] = nil
+  session.trackAttributions = trackAttributions
+end
 
 local ttl = tonumber(session.ttl) or fallbackTtl
 redis.call('SETEX', key, ttl, cjson.encode(session))
