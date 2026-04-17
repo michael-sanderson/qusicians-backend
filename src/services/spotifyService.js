@@ -479,18 +479,6 @@ module.exports = (
       status: track.status || "pending",
     }));
 
-  const normalizeConfirmedTracksForClient = (confirmedTracks = []) =>
-    confirmedTracks.map((track) => ({
-      id: track.id,
-      uri: track.uri,
-      title: track.title || "Queued track",
-      artist: track.artist || "Recently confirmed",
-      album: track.album || "",
-      artwork: track.artwork || null,
-      addedBy: normalizeAddedBy(track.addedBy),
-      status: "confirmed",
-    }));
-
   const pruneStagedConfirmedTracks = (confirmedTracks = [], decoratedQueue) => {
     const spotifyUris = new Set(
       [decoratedQueue?.nowPlaying, ...(decoratedQueue?.queue || [])]
