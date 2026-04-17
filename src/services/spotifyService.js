@@ -555,6 +555,55 @@ module.exports = (
   const buildPendingTrackId = () =>
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
+  const getRequesterKey = (track) => {
+    const addedBy = normalizeAddedBy(track?.addedBy);
+    const role = addedBy.role || "guest";
+    const name = typeof addedBy.name === "string" ? addedBy.name.trim().toLowerCase() : "";
+
+    return `${role}:${name || "unknown"}`;
+  };
+
+  const orderTracksForFairFlush = (tracks = []) => {
+    const bucketsByRequester = tracks.reduce((buckets, track, index) => {
+      const requesterKey = getRequesterKey(track);
+      const bucket = buckets.get(requesterKey) || {
+        requesterKey,
+        firstIndex: index,
+        tracks: [],
+      };
+
+      bucket.tracks.push(track);
+      buckets.set(requesterKey, bucket);
+      return buckets;
+    }, new Map());
+
+    const buckets = Array.from(bucketsByRequester.values());
+    const ordered = [];
+    let lastRequesterKey = null;
+
+    while (buckets.length > 0) {
+      buckets.sort((left, right) => {
+        const lengthDelta = right.tracks.length - left.tracks.length;
+        if (lengthDelta !== 0) return lengthDelta;
+        return left.firstIndex - right.firstIndex;
+      });
+
+      const selectedIndex = buckets.findIndex(
+        (bucket) => bucket.requesterKey !== lastRequesterKey
+      );
+      const bucket = buckets[selectedIndex >= 0 ? selectedIndex : 0];
+
+      ordered.push(bucket.tracks.shift());
+      lastRequesterKey = bucket.requesterKey;
+
+      if (bucket.tracks.length === 0) {
+        buckets.splice(buckets.indexOf(bucket), 1);
+      }
+    }
+
+    return ordered;
+  };
+
   const getOrCreateFlushState = (sessionId) => {
     const existing = flushStateBySession.get(sessionId);
     if (existing) return existing;
@@ -588,7 +637,7 @@ module.exports = (
         return;
       }
 
-      const chunk = flushablePending.slice();
+      const chunk = orderTracksForFairFlush(flushablePending);
       const uris = chunk.map((track) => track.uri).filter(Boolean);
       if (uris.length === 0) {
         const updated = {
