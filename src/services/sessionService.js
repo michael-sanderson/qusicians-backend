@@ -100,6 +100,29 @@ local trackAttributions = session.trackAttributions or {}
 local pendingTrack = cjson.decode(pendingTrackJson)
 local addedBy = cjson.decode(addedByJson)
 
+for i = 1, #pendingTracks do
+  local existingTrack = pendingTracks[i]
+  if existingTrack.uri == pendingTrack.uri then
+    return cjson.encode({
+      ok = true,
+      duplicate = true,
+      duplicateReason = "pending",
+      existingPendingTrackId = existingTrack.id,
+      requestedBy = existingTrack.addedBy
+    })
+  end
+end
+
+if trackAttributions[pendingTrack.uri] then
+  return cjson.encode({
+    ok = true,
+    duplicate = true,
+    duplicateReason = "previously_requested",
+    existingPendingTrackId = cjson.null,
+    requestedBy = trackAttributions[pendingTrack.uri]
+  })
+end
+
 table.insert(pendingTracks, pendingTrack)
 trackAttributions[pendingTrack.uri] = addedBy
 
@@ -109,7 +132,45 @@ session.trackAttributions = trackAttributions
 local ttl = tonumber(session.ttl) or fallbackTtl
 redis.call('SETEX', key, ttl, cjson.encode(session))
 
-return cjson.encode({ ok = true })
+return cjson.encode({ ok = true, duplicate = false })
+`;
+  const removePendingTrackScript = `
+local key = KEYS[1]
+local pendingTrackId = ARGV[1]
+local fallbackTtl = tonumber(ARGV[2])
+
+local raw = redis.call('GET', key)
+if not raw then
+  return cjson.encode({ ok = false, code = "SESSION_NOT_FOUND" })
+end
+
+local session = cjson.decode(raw)
+local pendingTracks = session.pendingTracks or {}
+local trackAttributions = session.trackAttributions or {}
+local nextPendingTracks = {}
+local removed = false
+local removedUri = nil
+
+for i = 1, #pendingTracks do
+  local track = pendingTracks[i]
+  if track.id == pendingTrackId then
+    removed = true
+    removedUri = track.uri
+  else
+    table.insert(nextPendingTracks, track)
+  end
+end
+
+session.pendingTracks = nextPendingTracks
+if removedUri then
+  trackAttributions[removedUri] = nil
+  session.trackAttributions = trackAttributions
+end
+
+local ttl = tonumber(session.ttl) or fallbackTtl
+redis.call('SETEX', key, ttl, cjson.encode(session))
+
+return cjson.encode({ ok = true, removed = removed })
 `;
 
   /* ------------------------------------------------------------------
@@ -218,11 +279,52 @@ return cjson.encode({ ok = true })
       throw new AppError(result?.code || "SESSION_NOT_FOUND");
     }
 
+    if (result.duplicate) {
+      logger.info(
+        {
+          sessionId,
+          existingPendingTrackId: result.existingPendingTrackId,
+          trackUri: pendingTrack.uri,
+        },
+        "Duplicate pending track request squashed"
+      );
+
+      return {
+        appended: false,
+        duplicate: true,
+        duplicateReason: result.duplicateReason || "pending",
+        existingPendingTrackId: result.existingPendingTrackId || null,
+        requestedBy: result.requestedBy || null,
+      };
+    }
+
     logger.info(
       { sessionId, pendingTrackId: pendingTrack.id, trackUri: pendingTrack.uri },
       "Pending track appended to session"
     );
-    return true;
+    return {
+      appended: true,
+      duplicate: false,
+    };
+  };
+
+  const removePendingTrack = async (sessionId, pendingTrackId) => {
+    const rawResult = await redisClient.eval(removePendingTrackScript, {
+      keys: [sessionKey(sessionId)],
+      arguments: [pendingTrackId, String(C.SESSION_TTL_SECONDS)],
+    });
+    const result = JSON.parse(rawResult);
+
+    if (!result?.ok) {
+      throw new AppError(result?.code || "SESSION_NOT_FOUND");
+    }
+
+    logger.info(
+      { sessionId, pendingTrackId, removed: Boolean(result.removed) },
+      "Pending track removed from session"
+    );
+
+    return Boolean(result.removed);
   };
 
   const endSession = async (sessionId) => {
@@ -282,6 +384,7 @@ return cjson.encode({ ok = true })
     joinSession,
     leaveSession,
     appendPendingTrack,
+    removePendingTrack,
     endSession,
     persistSession,
   };

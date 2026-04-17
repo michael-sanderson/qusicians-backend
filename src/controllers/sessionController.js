@@ -6,10 +6,24 @@
 module.exports = (
   sessionService,
   creditService,
+  realtimeQueueState,
   setSessionCookie,
   clearSessionCookie,
   logger
 ) => {
+  /* ------------------------------------------------------------------
+   * Current session
+   * ------------------------------------------------------------------ */
+
+  const currentSessionHandler = (req, res) =>
+    res.json({
+      sessionId: req.session.sessionId,
+      role: req.userRole,
+      userId: req.userId || null,
+      displayName: req.displayName || null,
+      profileImageUrl: req.session.hostProfileImageUrl || null,
+    });
+
   /* ------------------------------------------------------------------
    * Join session
    * ------------------------------------------------------------------ */
@@ -47,12 +61,18 @@ module.exports = (
    * ------------------------------------------------------------------ */
 
   const leaveSessionHandler = (req, res, next) => {
-    const op =
-      req.userRole === "host" && req.userId === req.session.hostId
-        ? sessionService.endSession(req.session.sessionId)
-        : req.displayName
-        ? sessionService.leaveSession(req.session.sessionId, req.displayName)
-        : Promise.resolve();
+    const sessionId = req.session.sessionId;
+    const isHostEnding =
+      req.userRole === "host" && req.userId === req.session.hostId;
+    const op = isHostEnding
+      ? sessionService
+          .endSession(sessionId)
+          .then(() =>
+            realtimeQueueState.notifySessionEnded?.(sessionId, "host_ended_session")
+          )
+      : req.displayName
+      ? sessionService.leaveSession(sessionId, req.displayName)
+      : Promise.resolve();
 
     return op
       .then(() => {
@@ -98,6 +118,7 @@ module.exports = (
   };
 
   return {
+    currentSessionHandler,
     joinSessionHandler,
     leaveSessionHandler,
     getGuestListHandler,

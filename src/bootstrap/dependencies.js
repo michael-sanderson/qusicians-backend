@@ -114,6 +114,7 @@ function buildDependencies() {
     sessionService.getSession,
     sessionService.persistSession,
     sessionService.appendPendingTrack,
+    sessionService.removePendingTrack,
     creditService,
     perfMetrics,
     logger,
@@ -140,6 +141,7 @@ function buildDependencies() {
   const sessionController = createSessionController(
     sessionService,
     creditService,
+    realtimeQueueState,
     setSessionCookie,
     clearSessionCookie,
     logger

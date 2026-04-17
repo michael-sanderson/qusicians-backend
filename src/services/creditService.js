@@ -4,6 +4,12 @@
 // Uses Redis as source of truth and performs refill + consume atomically.
 
 module.exports = (redisClient, C, logger, AppError) => {
+  const hostCreditState = () => ({
+    allowed: true,
+    remaining: null,
+    nextRefillAt: null,
+  });
+
   const normalizeStoredCredits = (vals, now, refillMs) => {
     const parsedCredits = Number(vals?.credits);
     const parsedLastRefillMs = Number(vals?.last_refill_ms);
@@ -122,11 +128,7 @@ return { allowed, credits, nextRefillMs }
 
   const consumeCredit = async (sessionId, actor) => {
     if (actor?.role === "host") {
-      return {
-        allowed: true,
-        remaining: C.MAX,
-        nextRefillAt: Date.now(),
-      };
+      return hostCreditState();
     }
 
     const result = await run(sessionId, actor, true);
@@ -139,9 +141,19 @@ return { allowed, credits, nextRefillMs }
     return result;
   };
 
-  const getCredits = async (sessionId, actor) => run(sessionId, actor, false);
+  const getCredits = async (sessionId, actor) => {
+    if (actor?.role === "host") {
+      return hostCreditState();
+    }
+
+    return run(sessionId, actor, false);
+  };
 
   const grantCredit = async (sessionId, actor) => {
+    if (actor?.role === "host") {
+      return hostCreditState();
+    }
+
     const key = keyFor(sessionId, actor);
     const now = Date.now();
     const refillMs = C.REFILL_INTERVAL_SECONDS * 1000;
