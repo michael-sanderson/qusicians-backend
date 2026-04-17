@@ -261,11 +261,36 @@ module.exports = (
         addedBy,
         requestedAt: Date.now(),
       };
-      await appendPendingTrack(validSession.sessionId, pendingTrack, addedBy);
+      const appendResult = await appendPendingTrack(
+        validSession.sessionId,
+        pendingTrack,
+        addedBy
+      );
+
+      if (appendResult?.duplicate) {
+        let creditsRemaining = creditResult.remaining;
+        if (actor?.role !== "host") {
+          const refundResult = await creditService.grantCredit(
+            validSession.sessionId,
+            actor
+          );
+          creditsRemaining = refundResult.remaining;
+        }
+
+        return {
+          success: true,
+          duplicate: true,
+          pending: false,
+          creditsRemaining,
+          existingPendingTrackId: appendResult.existingPendingTrackId || null,
+          requestedBy: normalizeAddedBy(appendResult.requestedBy),
+        };
+      }
 
       logger.info({ trackUri }, "Accepted track into pending batch queue");
       return {
         success: true,
+        duplicate: false,
         pending: true,
         creditsRemaining: creditResult.remaining,
         pendingTrackId: pendingId,

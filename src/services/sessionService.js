@@ -100,6 +100,18 @@ local trackAttributions = session.trackAttributions or {}
 local pendingTrack = cjson.decode(pendingTrackJson)
 local addedBy = cjson.decode(addedByJson)
 
+for i = 1, #pendingTracks do
+  local existingTrack = pendingTracks[i]
+  if existingTrack.uri == pendingTrack.uri then
+    return cjson.encode({
+      ok = true,
+      duplicate = true,
+      existingPendingTrackId = existingTrack.id,
+      requestedBy = existingTrack.addedBy
+    })
+  end
+end
+
 table.insert(pendingTracks, pendingTrack)
 trackAttributions[pendingTrack.uri] = addedBy
 
@@ -109,7 +121,7 @@ session.trackAttributions = trackAttributions
 local ttl = tonumber(session.ttl) or fallbackTtl
 redis.call('SETEX', key, ttl, cjson.encode(session))
 
-return cjson.encode({ ok = true })
+return cjson.encode({ ok = true, duplicate = false })
 `;
 
   /* ------------------------------------------------------------------
@@ -218,11 +230,32 @@ return cjson.encode({ ok = true })
       throw new AppError(result?.code || "SESSION_NOT_FOUND");
     }
 
+    if (result.duplicate) {
+      logger.info(
+        {
+          sessionId,
+          existingPendingTrackId: result.existingPendingTrackId,
+          trackUri: pendingTrack.uri,
+        },
+        "Duplicate pending track request squashed"
+      );
+
+      return {
+        appended: false,
+        duplicate: true,
+        existingPendingTrackId: result.existingPendingTrackId || null,
+        requestedBy: result.requestedBy || null,
+      };
+    }
+
     logger.info(
       { sessionId, pendingTrackId: pendingTrack.id, trackUri: pendingTrack.uri },
       "Pending track appended to session"
     );
-    return true;
+    return {
+      appended: true,
+      duplicate: false,
+    };
   };
 
   const endSession = async (sessionId) => {
