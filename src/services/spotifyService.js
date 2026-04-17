@@ -236,6 +236,7 @@ module.exports = (
     try {
       const validSession = await ensureValidSession(session);
       const normalizedSession = ensureTrackQueueState(validSession);
+      const isHostActor = actor?.role === "host";
       const guest =
         actor?.role === "guest"
           ? resolveGuestByName(normalizedSession.guests, actor.displayName)
@@ -260,20 +261,24 @@ module.exports = (
       );
 
       if (appendResult?.duplicate) {
-        const credits = await creditService.getCredits(validSession.sessionId, actor);
+        const creditsRemaining = isHostActor
+          ? null
+          : (await creditService.getCredits(validSession.sessionId, actor)).remaining;
 
         return {
           success: true,
           duplicate: true,
           duplicateReason: appendResult.duplicateReason || "pending",
           pending: false,
-          creditsRemaining: credits.remaining,
+          creditsRemaining,
           existingPendingTrackId: appendResult.existingPendingTrackId || null,
           requestedBy: normalizeAddedBy(appendResult.requestedBy),
         };
       }
 
-      const creditResult = await creditService.consumeCredit(validSession.sessionId, actor);
+      const creditResult = isHostActor
+        ? { allowed: true, remaining: null }
+        : await creditService.consumeCredit(validSession.sessionId, actor);
 
       if (!creditResult.allowed) {
         await removePendingTrack(validSession.sessionId, pendingId);
@@ -467,7 +472,7 @@ module.exports = (
     if (!previousSnapshot?.uri) return;
 
     const actor = resolveCreditActorForPlayedTrack(session, previousSnapshot);
-    if (!actor) return;
+    if (!actor || actor.role === "host") return;
 
     try {
       await creditService.grantCredit(session.sessionId, actor);
