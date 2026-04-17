@@ -28,7 +28,18 @@ const resolvePlaylistId = (input) => {
 
   if (!trimmed) return null;
 
-  return /^[A-Za-z0-9]{22}$/.test(trimmed) ? trimmed : null;
+  const directIdMatch = trimmed.match(/^[A-Za-z0-9]{22}$/);
+  if (directIdMatch) return trimmed;
+
+  const spotifyUriMatch = trimmed.match(/^spotify:playlist:([A-Za-z0-9]{22})$/);
+  if (spotifyUriMatch) return spotifyUriMatch[1];
+
+  const urlMatch = trimmed.match(
+    /^https?:\/\/open\.spotify\.com\/playlist\/([A-Za-z0-9]{22})(?:[/?#].*)?$/
+  );
+  if (urlMatch) return urlMatch[1];
+
+  return null;
 };
 
 module.exports = {
@@ -36,4 +47,3 @@ module.exports = {
   normalizeTrackMeta,
   resolvePlaylistId,
 };
-
