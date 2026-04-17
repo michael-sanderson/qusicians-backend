@@ -43,17 +43,6 @@ module.exports = (redisClient, C, logger, AppError) => {
   };
 
   const keyFor = (sessionId, actor) => {
-    const role = actor?.role === "host" ? "host" : "guest";
-
-    if (role === "host") {
-      const hostUserId =
-        typeof actor?.userId === "string" ? actor.userId.trim() : "";
-      if (!hostUserId) {
-        throw new AppError("CREDITS_IDENTITY_MISSING");
-      }
-      return `${C.KEY_PREFIX}${sessionId}:host:${hostUserId}`;
-    }
-
     const guestName =
       typeof actor?.displayName === "string" ? actor.displayName.trim().toLowerCase() : "";
     if (!guestName) {

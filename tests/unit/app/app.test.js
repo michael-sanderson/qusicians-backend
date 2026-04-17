@@ -74,3 +74,36 @@ describe("app routes", () => {
     await request(buildApp()).get("/does-not-exist").expect(404).expect("Not found");
   });
 });
+
+  test("mounts perf routes when perf metrics are enabled", async () => {
+    const logger = createLogger();
+    const app = createApp({
+      perfMetrics: {
+        enabled: true,
+        snapshot: jest.fn(() => ({ enabled: true, counters: {} })),
+        reset: jest.fn(() => ({ enabled: true, counters: {} })),
+        increment: jest.fn(),
+        observeTiming: jest.fn(),
+        setGauge: jest.fn(),
+      },
+      requestLogger: (req, res, next) => next(),
+      requireSession: (req, res, next) => next(),
+      sessionController: {
+        currentSessionHandler: (req, res) => res.json({ ok: true }),
+        joinSessionHandler: (req, res) => res.json({ ok: true }),
+        leaveSessionHandler: (req, res) => res.status(204).end(),
+        getGuestListHandler: (req, res) => res.json({ guests: [] }),
+      },
+      spotifyController: {
+        loginHandler: (req, res) => res.redirect("/login"),
+        callbackHandler: (req, res) => res.redirect("/dashboard"),
+        getQueueHandler: (req, res) => res.json({ queue: [] }),
+        findTracksHandler: (req, res) => res.json([]),
+        addSongHandler: (req, res) => res.json({ ok: true }),
+        importPlaylistHandler: (req, res) => res.json({ ok: true }),
+      },
+      errorResponder: createErrorResponder(toHttpErrorFactory(ERROR_CATALOG), logger),
+    });
+
+    await request(app).get("/__perf/metrics").expect(200).expect({ enabled: true, counters: {} });
+  });

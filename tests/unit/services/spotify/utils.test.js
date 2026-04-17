@@ -72,3 +72,19 @@ describe("spotify utility helpers", () => {
     expect(resolveGuestByName([{ name: "Alice" }], " alice ")).toEqual({ name: "Alice" });
   });
 });
+
+  test("covers fallback attribution branches", () => {
+    expect(resolveAddedBy({ role: "guest", displayName: "   ", avatarDataUrl: "actor.png" }, null)).toEqual({
+      name: "Host",
+      role: "guest",
+      avatarDataUrl: "actor.png",
+    });
+    expect(normalizeAttributions("not usable")).toEqual({});
+    expect(resolveGuestByName(null, "Alice")).toBeNull();
+    expect(resolveGuestByName([{ name: 123 }], "Alice")).toBeNull();
+  });
+
+  test("covers empty attribution and blank playlist id helpers", () => {
+    expect(normalizeAttributions(null)).toEqual({});
+    expect(resolvePlaylistId("   ")).toBeNull();
+  });

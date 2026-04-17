@@ -8,4 +8,12 @@ module.exports = {
     "!src/server.js",
     "!src/backend.zip",
   ],
+  coverageThreshold: {
+    global: {
+      statements: 100,
+      lines: 100,
+      functions: 100,
+      branches: 85,
+    },
+  },
 };

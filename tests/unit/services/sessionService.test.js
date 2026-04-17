@@ -124,3 +124,89 @@ describe("sessionService", () => {
     });
   });
 });
+
+describe("sessionService additional edge cases", () => {
+  const C = { SESSION_PREFIX: "session:", SESSION_TTL_SECONDS: 86400 };
+  const makeService = (evalResult) => {
+    const redisClient = {
+      get: jest.fn(async () => JSON.stringify({ sessionId: "s1" })),
+      setEx: jest.fn(async () => {}),
+      del: jest.fn(async () => 1),
+      eval: jest.fn(async () => JSON.stringify(evalResult)),
+    };
+    return { service: createSessionService(redisClient, createLogger(), C, AppError), redisClient };
+  };
+
+  test("joinSession maps script failure codes and default missing profile image", async () => {
+    let built = makeService({ ok: false, code: "DISPLAY_NAME_TAKEN" });
+    await expect(built.service.joinSession("s1", "Alice")).rejects.toMatchObject({ code: "DISPLAY_NAME_TAKEN" });
+
+    built = makeService({ ok: true, sessionId: "s1" });
+    await expect(built.service.joinSession("s1", "Alice", "   ")).resolves.toMatchObject({
+      profileImageUrl: null,
+      avatarDataUrl: null,
+    });
+  });
+
+  test("leaveSession maps missing session and succeeds otherwise", async () => {
+    let built = makeService({ ok: false });
+    await expect(built.service.leaveSession("s1", "Alice")).rejects.toMatchObject({ code: "SESSION_NOT_FOUND" });
+
+    built = makeService({ ok: true });
+    await expect(built.service.leaveSession("s1", "Alice")).resolves.toBe(true);
+  });
+
+  test("appendPendingTrack success and missing session", async () => {
+    let built = makeService({ ok: false });
+    await expect(built.service.appendPendingTrack("s1", { uri: "u" }, { name: "A" })).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+    });
+
+    built = makeService({ ok: true, duplicate: false });
+    await expect(built.service.appendPendingTrack("s1", { id: "p", uri: "u" }, { name: "A" })).resolves.toEqual({
+      appended: true,
+      duplicate: false,
+    });
+  });
+
+  test("removePendingTrack success, false removal, and missing session", async () => {
+    let built = makeService({ ok: false });
+    await expect(built.service.removePendingTrack("s1", "p1")).rejects.toMatchObject({ code: "SESSION_NOT_FOUND" });
+
+    built = makeService({ ok: true, removed: false });
+    await expect(built.service.removePendingTrack("s1", "p1")).resolves.toBe(false);
+
+    built = makeService({ ok: true, removed: true });
+    await expect(built.service.removePendingTrack("s1", "p1")).resolves.toBe(true);
+  });
+
+  test("endSession succeeds and persistSession uses default ttl", async () => {
+    const built = makeService({ ok: true });
+    await expect(built.service.endSession("s1")).resolves.toBe(true);
+    await expect(built.service.persistSession({ sessionId: "s2" })).resolves.toEqual({ sessionId: "s2" });
+    expect(built.redisClient.setEx).toHaveBeenCalledWith("session:s2", 86400, JSON.stringify({ sessionId: "s2" }));
+  });
+
+  test("avatar normalization rejects too-large and non-string inputs", async () => {
+    const built = makeService({ ok: true, sessionId: "s1" });
+    await expect(built.service.joinSession("s1", "Alice", {})).rejects.toMatchObject({ code: "INVALID_AVATAR_IMAGE" });
+    await expect(built.service.joinSession("s1", "Alice", `data:image/png;base64,${"a".repeat(512001)}`)).rejects.toMatchObject({
+      code: "AVATAR_IMAGE_TOO_LARGE",
+    });
+  });
+});
+
+  test("getSession returns stored JSON and joinSession rejects non-string names", async () => {
+    const store = new Map([["session:s1", JSON.stringify({ sessionId: "s1", hostId: "h" })]]);
+    const redisClient = {
+      get: jest.fn(async (key) => store.get(key) || null),
+      setEx: jest.fn(),
+      del: jest.fn(),
+      eval: jest.fn(),
+    };
+    const service = createSessionService(redisClient, createLogger(), { SESSION_PREFIX: "session:", SESSION_TTL_SECONDS: 86400 }, AppError);
+
+    await expect(service.getSession("s1")).resolves.toEqual({ sessionId: "s1", hostId: "h" });
+    await expect(service.joinSession("s1", null)).rejects.toMatchObject({ code: "DISPLAY_NAME_REQUIRED" });
+  });
+

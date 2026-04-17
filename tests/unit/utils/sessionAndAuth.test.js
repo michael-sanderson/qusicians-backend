@@ -49,3 +49,27 @@ describe("session and auth utilities", () => {
     expect(url.searchParams.get("state")).toBe("state-1");
   });
 });
+
+  test("session cookie utilities set and clear cookie options", () => {
+    jest.resetModules();
+    process.env.NODE_ENV = "production";
+    process.env.COOKIE_DOMAIN = ".qusicians.com";
+    const { setSessionCookie, clearSessionCookie } = require("../../../src/utils/sessionUtil");
+    const res = { cookie: jest.fn(), clearCookie: jest.fn() };
+
+    setSessionCookie(res, { sessionId: "s1", role: "host" });
+    clearSessionCookie(res);
+
+    expect(res.cookie).toHaveBeenCalledWith(
+      "partySession",
+      JSON.stringify({ sessionId: "s1", role: "host" }),
+      expect.objectContaining({ secure: true, sameSite: "none", path: "/", domain: ".qusicians.com" })
+    );
+    expect(res.clearCookie).toHaveBeenCalledWith(
+      "partySession",
+      expect.objectContaining({ secure: true, sameSite: "none", path: "/", domain: ".qusicians.com" })
+    );
+    delete process.env.COOKIE_DOMAIN;
+    process.env.NODE_ENV = "test";
+    jest.resetModules();
+  });

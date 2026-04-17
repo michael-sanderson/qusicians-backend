@@ -55,3 +55,16 @@ describe("requireSession middleware", () => {
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ code: "SESSION_INVALID_OR_EXPIRED" }));
   });
 });
+
+  test("passes unexpected session load failures through after logging", async () => {
+    const parseSessionCookie = jest.fn(() => ({ ok: true, sessionId: "s1" }));
+    const err = new Error("redis down");
+    const logger = createLogger();
+    const sessionService = { getSession: jest.fn(async () => { throw err; }) };
+    const next = jest.fn();
+
+    await createRequireSession(parseSessionCookie, sessionService, logger, AppError)({ cookies: { partySession: "raw-cookie" } }, {}, next);
+
+    expect(logger.error).toHaveBeenCalledWith({ err, sessionId: "s1" }, "Failed to load session from store");
+    expect(next).toHaveBeenCalledWith(err);
+  });

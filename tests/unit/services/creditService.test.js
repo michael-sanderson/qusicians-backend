@@ -89,3 +89,65 @@ describe("creditService", () => {
   });
 });
 
+
+describe("creditService additional branch coverage", () => {
+  const C = {
+    KEY_PREFIX: "credits:",
+    MAX: 3,
+    REFILL_INTERVAL_SECONDS: 60,
+    SESSION_TTL_SECONDS: 86400,
+  };
+
+  test("logs denied consumes and defaults malformed eval output", async () => {
+    const redisClient = { eval: jest.fn(async () => [0, undefined, undefined]) };
+    const logger = createLogger();
+    jest.spyOn(Date, "now").mockReturnValue(1000);
+    const service = createCreditService(redisClient, C, logger, AppError);
+
+    await expect(service.consumeCredit("s1", { role: "guest", displayName: "Alice" })).resolves.toEqual({
+      allowed: false,
+      remaining: 0,
+      nextRefillAt: 61000,
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      { sessionId: "s1", actorRole: "guest", nextRefillAt: 61000 },
+      "Add denied due to exhausted credits"
+    );
+  });
+
+  test("getCredits uses non-consuming script argument", async () => {
+    const redisClient = { eval: jest.fn(async () => [1, 3, 1000]) };
+    const service = createCreditService(redisClient, C, createLogger(), AppError);
+
+    await service.getCredits("s1", { role: "guest", displayName: "Alice" });
+    expect(redisClient.eval.mock.calls[0][1].arguments.at(-1)).toBe("0");
+  });
+
+  test("grantCredit handles missing, future, and no-earned stored states", async () => {
+    jest.spyOn(Date, "now").mockReturnValue(1000);
+    const states = [{}, { credits: "1", last_refill_ms: "2000" }, { credits: "1", last_refill_ms: "999" }];
+    const redisClient = {
+      hGetAll: jest.fn(async () => states.shift()),
+      hSet: jest.fn(async () => {}),
+      expire: jest.fn(async () => {}),
+    };
+    const service = createCreditService(redisClient, C, createLogger(), AppError);
+
+    await service.grantCredit("s1", { role: "guest", displayName: "Alice" });
+    await service.grantCredit("s1", { role: "guest", displayName: "Alice" });
+    await service.grantCredit("s1", { role: "guest", displayName: "Alice" });
+
+    expect(redisClient.hSet).toHaveBeenNthCalledWith(1, "credits:s1:guest:alice", {
+      credits: "3",
+      last_refill_ms: "1000",
+    });
+    expect(redisClient.hSet).toHaveBeenNthCalledWith(2, "credits:s1:guest:alice", {
+      credits: "2",
+      last_refill_ms: "2000",
+    });
+    expect(redisClient.hSet).toHaveBeenNthCalledWith(3, "credits:s1:guest:alice", {
+      credits: "2",
+      last_refill_ms: "999",
+    });
+  });
+});

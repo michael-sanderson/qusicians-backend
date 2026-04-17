@@ -32,3 +32,19 @@ describe("searchCache", () => {
     expect(cache.get("c")).toBe(3);
   });
 });
+
+  test("prunes expired entries before inserting new values", () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const cache = createSearchCache({ ttlMs: 1000, maxEntries: 10 });
+    cache.set("old", 1);
+    jest.advanceTimersByTime(1001);
+    cache.set("new", 2);
+
+    expect(cache.get("old")).toBeNull();
+    expect(cache.get("new")).toBe(2);
+    jest.useRealTimers();
+  });
+
+
+

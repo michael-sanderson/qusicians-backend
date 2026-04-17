@@ -71,4 +71,15 @@ describe("searchService", () => {
       code: "INVALID_SEARCH_QUERY",
     });
   });
+
+  test("logs and counts failed upstream searches", async () => {
+    const { service, spotifyGateway, perfMetrics } = buildService();
+    const err = Object.assign(new Error("spotify down"), { response: { status: 503, data: { error: true } } });
+    spotifyGateway.get.mockRejectedValueOnce(err);
+    const ensureValidSession = jest.fn(async (session) => session);
+
+    await expect(service.findTracks({ accessToken: "token" }, { q: "drake" }, ensureValidSession)).rejects.toBe(err);
+    expect(perfMetrics.increment).toHaveBeenCalledWith(["search", "failed"]);
+  });
 });
+
