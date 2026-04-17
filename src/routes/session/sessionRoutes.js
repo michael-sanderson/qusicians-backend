@@ -5,6 +5,7 @@ module.exports = (router, sessionController, requireSession) => {
    * Session entry
    * ------------------------------------------------------------------ */
 
+  router.get("/current", requireSession, sessionController.currentSessionHandler);
   router.post("/join", sessionController.joinSessionHandler);
 
   /* ------------------------------------------------------------------

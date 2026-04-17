@@ -11,6 +11,19 @@ module.exports = (
   logger
 ) => {
   /* ------------------------------------------------------------------
+   * Current session
+   * ------------------------------------------------------------------ */
+
+  const currentSessionHandler = (req, res) =>
+    res.json({
+      sessionId: req.session.sessionId,
+      role: req.userRole,
+      userId: req.userId || null,
+      displayName: req.displayName || null,
+      profileImageUrl: req.session.hostProfileImageUrl || null,
+    });
+
+  /* ------------------------------------------------------------------
    * Join session
    * ------------------------------------------------------------------ */
 
@@ -98,6 +111,7 @@ module.exports = (
   };
 
   return {
+    currentSessionHandler,
     joinSessionHandler,
     leaveSessionHandler,
     getGuestListHandler,

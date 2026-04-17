@@ -179,18 +179,26 @@ module.exports = (
         normalizedSession.confirmedTracks,
         decorated
       );
-      const pendingQueue = normalizePendingTracksForClient(normalizedSession.pendingTracks);
-      const confirmedStagedQueue = normalizeConfirmedTracksForClient(cleanedConfirmedTracks);
-      const confirmedQueue = [...confirmedStagedQueue, ...decorated.queue];
+      const pendingReconciliation = reconcilePendingTracksWithSpotifyQueue(
+        normalizedSession.pendingTracks,
+        decorated
+      );
+      const pendingQueue = normalizePendingTracksForClient(
+        pendingReconciliation.pendingTracks
+      );
+      const confirmedQueue = decorated.queue;
 
       const shouldPersistQueueState =
-        cleanedConfirmedTracks.length !== (normalizedSession.confirmedTracks || []).length;
+        cleanedConfirmedTracks.length !==
+          (normalizedSession.confirmedTracks || []).length ||
+        pendingReconciliation.changed;
 
       if (hasTrackTransition || shouldPersistQueueState) {
         await grantCreditForPlayedTrack(validSession, previousSnapshot);
 
         await persistSession({
           ...normalizedSession,
+          pendingTracks: pendingReconciliation.pendingTracks,
           confirmedTracks: cleanedConfirmedTracks,
           currentNowPlayingSnapshot: decorated.nowPlaying || null,
           lastPlayedTrack,
@@ -468,7 +476,7 @@ module.exports = (
       album: track.album || "",
       artwork: track.artwork || null,
       addedBy: normalizeAddedBy(track.addedBy),
-      status: "pending",
+      status: track.status || "pending",
     }));
 
   const normalizeConfirmedTracksForClient = (confirmedTracks = []) =>
@@ -495,6 +503,38 @@ module.exports = (
       .filter((track) => track?.uri && !spotifyUris.has(track.uri))
       .filter((track) => now - (track.confirmedAt || now) <= CONFIRMED_TRACK_RETENTION_MS)
       .slice(-MAX_STAGED_CONFIRMED_TRACKS);
+  };
+
+  const reconcilePendingTracksWithSpotifyQueue = (pendingTracks = [], decoratedQueue) => {
+    const visibleTracks = [
+      decoratedQueue?.nowPlaying,
+      ...(decoratedQueue?.queue || []),
+    ].filter(Boolean);
+    const visibleUriCounts = visibleTracks.reduce((counts, track) => {
+      if (!track?.uri) return counts;
+      counts.set(track.uri, (counts.get(track.uri) || 0) + 1);
+      return counts;
+    }, new Map());
+
+    let changed = false;
+    const remainingPending = [];
+
+    pendingTracks.forEach((track) => {
+      const count = track?.uri ? visibleUriCounts.get(track.uri) || 0 : 0;
+
+      if (count > 0) {
+        visibleUriCounts.set(track.uri, count - 1);
+        changed = true;
+        return;
+      }
+
+      remainingPending.push(track);
+    });
+
+    return {
+      pendingTracks: remainingPending,
+      changed,
+    };
   };
 
   const buildPendingTrackId = () =>
@@ -525,12 +565,24 @@ module.exports = (
         return;
       }
 
-      const chunk = normalized.pendingTracks.slice();
+      const flushablePending = normalized.pendingTracks.filter(
+        (track) => (track.status || "pending") === "pending"
+      );
+
+      if (flushablePending.length === 0) {
+        return;
+      }
+
+      const chunk = flushablePending.slice();
       const uris = chunk.map((track) => track.uri).filter(Boolean);
       if (uris.length === 0) {
         const updated = {
           ...normalized,
-          pendingTracks: normalized.pendingTracks.slice(chunk.length),
+          pendingTracks: normalized.pendingTracks.map((track) =>
+            (track.status || "pending") === "pending"
+              ? { ...track, status: "awaiting_position", flushedAt: Date.now() }
+              : track
+          ),
         };
         await persistSession(updated);
         return;
@@ -544,19 +596,17 @@ module.exports = (
       perfMetrics?.increment(["flush", "completed"]);
       perfMetrics?.increment(["flush", "tracks"], chunk.length);
 
-      const remainingPending = normalized.pendingTracks.slice(chunk.length);
-      const stagedConfirmed = [
-        ...normalized.confirmedTracks,
-        ...chunk.map((track) => ({
-          ...track,
-          confirmedAt: Date.now(),
-        })),
-      ].slice(-MAX_STAGED_CONFIRMED_TRACKS);
+      const flushedIds = new Set(chunk.map((track) => track.id).filter(Boolean));
+      const flushedAt = Date.now();
+      const nextPendingTracks = normalized.pendingTracks.map((track) =>
+        flushedIds.has(track.id)
+          ? { ...track, status: "awaiting_position", flushedAt }
+          : track
+      );
 
       await persistSession({
         ...normalized,
-        pendingTracks: remainingPending,
-        confirmedTracks: stagedConfirmed,
+        pendingTracks: nextPendingTracks,
       });
 
     } catch (err) {
