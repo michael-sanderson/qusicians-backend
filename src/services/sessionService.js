@@ -123,6 +123,37 @@ redis.call('SETEX', key, ttl, cjson.encode(session))
 
 return cjson.encode({ ok = true, duplicate = false })
 `;
+  const removePendingTrackScript = `
+local key = KEYS[1]
+local pendingTrackId = ARGV[1]
+local fallbackTtl = tonumber(ARGV[2])
+
+local raw = redis.call('GET', key)
+if not raw then
+  return cjson.encode({ ok = false, code = "SESSION_NOT_FOUND" })
+end
+
+local session = cjson.decode(raw)
+local pendingTracks = session.pendingTracks or {}
+local nextPendingTracks = {}
+local removed = false
+
+for i = 1, #pendingTracks do
+  local track = pendingTracks[i]
+  if track.id == pendingTrackId then
+    removed = true
+  else
+    table.insert(nextPendingTracks, track)
+  end
+end
+
+session.pendingTracks = nextPendingTracks
+
+local ttl = tonumber(session.ttl) or fallbackTtl
+redis.call('SETEX', key, ttl, cjson.encode(session))
+
+return cjson.encode({ ok = true, removed = removed })
+`;
 
   /* ------------------------------------------------------------------
    * Session lifecycle
@@ -258,6 +289,25 @@ return cjson.encode({ ok = true, duplicate = false })
     };
   };
 
+  const removePendingTrack = async (sessionId, pendingTrackId) => {
+    const rawResult = await redisClient.eval(removePendingTrackScript, {
+      keys: [sessionKey(sessionId)],
+      arguments: [pendingTrackId, String(C.SESSION_TTL_SECONDS)],
+    });
+    const result = JSON.parse(rawResult);
+
+    if (!result?.ok) {
+      throw new AppError(result?.code || "SESSION_NOT_FOUND");
+    }
+
+    logger.info(
+      { sessionId, pendingTrackId, removed: Boolean(result.removed) },
+      "Pending track removed from session"
+    );
+
+    return Boolean(result.removed);
+  };
+
   const endSession = async (sessionId) => {
     const deletedCount = await redisClient.del(sessionKey(sessionId));
 
@@ -315,6 +365,7 @@ return cjson.encode({ ok = true, duplicate = false })
     joinSession,
     leaveSession,
     appendPendingTrack,
+    removePendingTrack,
     endSession,
     persistSession,
   };

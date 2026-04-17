@@ -10,6 +10,7 @@ module.exports = (
   getSession,
   persistSession,
   appendPendingTrack,
+  removePendingTrack,
   creditService,
   perfMetrics,
   logger,
@@ -235,15 +236,6 @@ module.exports = (
     try {
       const validSession = await ensureValidSession(session);
       const normalizedSession = ensureTrackQueueState(validSession);
-      const creditResult = await creditService.consumeCredit(validSession.sessionId, actor);
-
-      if (!creditResult.allowed) {
-        const err = new AppError("NO_CREDITS");
-        err.nextRefillAt = creditResult.nextRefillAt;
-        err.creditsRemaining = creditResult.remaining;
-        throw err;
-      }
-
       const guest =
         actor?.role === "guest"
           ? resolveGuestByName(normalizedSession.guests, actor.displayName)
@@ -268,23 +260,27 @@ module.exports = (
       );
 
       if (appendResult?.duplicate) {
-        let creditsRemaining = creditResult.remaining;
-        if (actor?.role !== "host") {
-          const refundResult = await creditService.grantCredit(
-            validSession.sessionId,
-            actor
-          );
-          creditsRemaining = refundResult.remaining;
-        }
+        const credits = await creditService.getCredits(validSession.sessionId, actor);
 
         return {
           success: true,
           duplicate: true,
           pending: false,
-          creditsRemaining,
+          creditsRemaining: credits.remaining,
           existingPendingTrackId: appendResult.existingPendingTrackId || null,
           requestedBy: normalizeAddedBy(appendResult.requestedBy),
         };
+      }
+
+      const creditResult = await creditService.consumeCredit(validSession.sessionId, actor);
+
+      if (!creditResult.allowed) {
+        await removePendingTrack(validSession.sessionId, pendingId);
+
+        const err = new AppError("NO_CREDITS");
+        err.nextRefillAt = creditResult.nextRefillAt;
+        err.creditsRemaining = creditResult.remaining;
+        throw err;
       }
 
       logger.info({ trackUri }, "Accepted track into pending batch queue");

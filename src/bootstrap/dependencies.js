@@ -114,6 +114,7 @@ function buildDependencies() {
     sessionService.getSession,
     sessionService.persistSession,
     sessionService.appendPendingTrack,
+    sessionService.removePendingTrack,
     creditService,
     perfMetrics,
     logger,
