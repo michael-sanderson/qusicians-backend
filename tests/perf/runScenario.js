@@ -184,7 +184,10 @@ const buildScenarioFocusSummary = (scenarioName, metrics, joinSummary, actionSum
     return {
       query: meta.query || null,
       prefetchedTrack: Boolean(meta.prefetchedTrack),
-      trackUri: meta.trackUri || null,
+      uniqueTrackCount: meta.uniqueTrackCount || 0,
+      requestedTrackCount: meta.requestedTrackCount || 0,
+      expectedDuplicateRequests: meta.expectedDuplicateRequests || 0,
+      sampleTrackUris: meta.sampleTrackUris || [],
       joinFailures: joinSummary.failed,
       actionFailures: actionSummary.failed,
       backendAddHits: sumCounterGroup(metrics.counters, "http.requests.POST./spotify/add"),
@@ -195,6 +198,8 @@ const buildScenarioFocusSummary = (scenarioName, metrics, joinSummary, actionSum
       spotifySearchHits: sumCounterGroup(metrics.counters, "spotify.started.search_tracks"),
       flushCompleted: common.flushCompleted,
       flushFailures: common.flushFailures,
+      duplicateResponses: meta.duplicateResponses || 0,
+      pendingResponses: meta.pendingResponses || 0,
     };
   }
 
@@ -258,7 +263,12 @@ const printScenarioSummary = (scenarioName, report) => {
 
   if (scenarioName === "add-burst") {
     console.log(`Prefetched track: ${summary.prefetchedTrack}`);
-    console.log(`Track uri: ${summary.trackUri || "none"}`);
+    console.log(`Unique prefetched tracks: ${summary.uniqueTrackCount}`);
+    console.log(`Requested tracks: ${summary.requestedTrackCount}`);
+    console.log(`Expected duplicate requests: ${summary.expectedDuplicateRequests}`);
+    console.log(`Duplicate responses: ${summary.duplicateResponses}`);
+    console.log(`Pending responses: ${summary.pendingResponses}`);
+    console.log(`Sample track uris: ${(summary.sampleTrackUris || []).join(", ") || "none"}`);
     console.log(`Backend add hits: ${summary.backendAddHits}`);
     console.log(`Spotify playlist appends: ${summary.spotifyPlaylistAppends}`);
     console.log(`Spotify search hits: ${summary.spotifySearchHits}`);
